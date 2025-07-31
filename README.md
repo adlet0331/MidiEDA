@@ -1,5 +1,5 @@
 # For MIDI EDA
 
 # Required
-/_transcribed_MIDI/
+/_transcribed_MIDI/   
 FluidR3_GM.sf2
