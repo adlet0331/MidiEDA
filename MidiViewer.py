@@ -6,9 +6,10 @@ import pretty_midi
 import mir_eval
 import io
 from pydub import AudioSegment
-from midi import slice_midi
+import MidiFeatures
 
-# --- 사용자 설정 영역 ---
+# --- User Settings ---
+# [IMPORTANT] Please modify the paths below to match your environment.
 PREDICTED_MIDI_PATH = "/Users/simhyeongju/AVAPT/EDA/_transcribed_MIDI/OnsetsAndFrames_2_5sec/"
 GROUNDTRUTH_MIDI_PATH = "/Users/simhyeongju/AVAPT/data/pianovam/"
 # -------------------------
@@ -16,7 +17,7 @@ GROUNDTRUTH_MIDI_PATH = "/Users/simhyeongju/AVAPT/data/pianovam/"
 pygame.init()
 pygame.mixer.init()
 
-SCREEN_WIDTH, SCREEN_HEIGHT = 1280, 800
+SCREEN_WIDTH, SCREEN_HEIGHT = 1600, 900
 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
 pygame.display.set_caption("MIDI Evaluation Viewer")
 
@@ -27,16 +28,22 @@ COLORS = {
     'piano_roll_bg': (40, 40, 40), 'grid_line': (60, 60, 60), 'c_note_line': (80, 80, 80),
     'playback_line': (255, 0, 0),
     'gt_only_color': (0, 150, 255), 'pred_only_color': (255, 165, 0),
-    'checkbox_border': (150, 150, 150), 'checkbox_checked': (200, 200, 200)
+    'checkbox_border': (150, 150, 150), 'checkbox_checked': (200, 200, 200),
+    'tooltip_bg': (250, 250, 220), 'tooltip_text': (10, 10, 10)
 }
+
+# --- Font Settings ---
+FONT_FILE = 'NanumGothic-Regular.ttf'
 try:
-    FONT_MAIN = pygame.font.Font(None, 32)
-    FONT_SMALL = pygame.font.Font(None, 24)
-    FONT_TINY = pygame.font.Font(None, 18)
-except:
-    FONT_MAIN = pygame.font.SysFont('arial', 30)
-    FONT_SMALL = pygame.font.SysFont('arial', 22)
-    FONT_TINY = pygame.font.SysFont('arial', 16)
+    FONT_MAIN = pygame.font.Font(FONT_FILE, 32)
+    FONT_SMALL = pygame.font.Font(FONT_FILE, 22)
+    FONT_TINY = pygame.font.Font(FONT_FILE, 18)
+    print(f"✅ Font '{FONT_FILE}' loaded successfully.")
+except Exception:
+    print(f"⚠️ Warning: Font '{FONT_FILE}' not found. Using default font.")
+    FONT_MAIN = pygame.font.Font(None, 36)
+    FONT_SMALL = pygame.font.Font(None, 26)
+    FONT_TINY = pygame.font.Font(None, 20)
 
 
 class MidiEvaluatorApp:
@@ -49,22 +56,37 @@ class MidiEvaluatorApp:
         self.evaluation_metadata = self._load_evaluation_metadata()
 
         self.FILE_COLUMNS = {
-            'index': {'label': '#', 'width': 50, 'key': 'index'},
-            'piece': {'label': 'Piece', 'width': 350, 'key': 'piece'},
-            'player': {'label': 'Player', 'width': 120, 'key': 'player'},
-            'skill': {'label': 'Skill', 'width': 100, 'key': 'skill'},
-            'split': {'label': 'Split', 'width': 80, 'key': 'split'},
-            'name': {'label': 'Record Time', 'width': 220, 'key': 'name'},
-            'p': {'label': 'P', 'width': 90, 'key': 'p'},
-            'r': {'label': 'R', 'width': 90, 'key': 'r'},
-            'f1': {'label': 'F1', 'width': 90, 'key': 'f1'}
+            'index': {'label': '#', 'width': 60, 'key': 'index'},
+            'piece': {'label': 'Piece', 'width': 500, 'key': 'piece'},
+            'player': {'label': 'Player', 'width': 150, 'key': 'player'},
+            'skill': {'label': 'Skill', 'width': 120, 'key': 'skill'},
+            'split': {'label': 'Split', 'width': 100, 'key': 'split'},
+            'name': {'label': 'Record Time', 'width': 280, 'key': 'name'},
+            'p': {'label': 'P', 'width': 100, 'key': 'p'},
+            'r': {'label': 'R', 'width': 100, 'key': 'r'},
+            'f1': {'label': 'F1', 'width': 100, 'key': 'f1'}
         }
         self.SEGMENT_COLUMNS = {
             'index': {'label': '#', 'width': 100, 'key': 'index'},
-            'num': {'label': 'Segment', 'width': 350, 'key': 'num'},
-            'precision': {'label': 'Precision', 'width': 250, 'key': 'p'},
-            'recall': {'label': 'Recall', 'width': 250, 'key': 'r'},
-            'f1': {'label': 'F1-Score', 'width': 250, 'key': 'f1'}
+            'num': {'label': 'Segment', 'width': 430, 'key': 'num'},
+            'precision': {'label': 'Precision', 'width': 330, 'key': 'p'},
+            'recall': {'label': 'Recall', 'width': 330, 'key': 'r'},
+            'f1': {'label': 'F1-Score', 'width': 330, 'key': 'f1'}
+        }
+        
+        self.features_info = {
+            'Hi-Pitch': ('highest_pitch', '{}', 'Highest pitch (MIDI note) in the segment.'),
+            'Lo-Pitch': ('lowest_pitch', '{}', 'Lowest pitch (MIDI note) in the segment.'),
+            'Range': ('pitch_range', '{}', 'Difference between highest and lowest pitch.'),
+            'Density': ('note_density', '{:.2f}', 'Average number of notes per second.'),
+            'Polyphony': ('polyphony', '{:.2f}', 'Average number of notes playing simultaneously.'),
+            'Avg Len': ('average_note_length', '{:.2f}s', 'Average duration of a single note.'),
+            'Max Len': ('max_note_length', '{:.2f}s', 'Duration of the longest note.'),
+            'Min Len': ('min_note_length', '{:.2f}s', 'Duration of the shortest note.'),
+            'Avg Int': ('interval_mean', '{:.2f}', 'Average pitch interval between consecutive notes.'),
+            'Int Std': ('interval_std', '{:.2f}', 'Standard deviation of pitch intervals.'),
+            'Avg IOI': ('ioi_mean', '{:.2f}s', 'Average Inter-Onset-Interval (time between note starts).'),
+            'IOI Std': ('ioi_std', '{:.2f}s', 'Standard deviation of IOIs.'),
         }
 
         self.file_list_sort_config = {'key': 'f1', 'ascending': True}
@@ -89,6 +111,8 @@ class MidiEvaluatorApp:
             'gt_checkbox_rect': pygame.Rect(0, 0, 0, 0),
             'pred_checkbox_rect': pygame.Rect(0, 0, 0, 0),
         }
+        
+        self.active_tooltip = None
 
     def _load_global_metadata(self):
         path = os.path.join(PREDICTED_MIDI_PATH, 'metadata.json')
@@ -127,7 +151,7 @@ class MidiEvaluatorApp:
         if not self.global_metadata or not self.evaluation_metadata:
             print("Error: Global metadata not loaded. Cannot create file list.")
             return []
-            
+
         folder_data_list = []
         evaluation_results = self.evaluation_metadata.get('file_scores', {})
         print("Loading average scores from global metadata...")
@@ -135,20 +159,20 @@ class MidiEvaluatorApp:
         for name, eval_data in evaluation_results.items():
             base_name = name.replace('_16020Hz', '')
             gt_info = self.groundtruth_metadata.get(base_name, {})
-            
+
             scores = {
                 'p': eval_data.get('Precision', 0.0),
                 'r': eval_data.get('Recall', 0.0),
                 'f1': eval_data.get('F1-Score', 0.0)
             }
-            
+
             skill = gt_info.get('P1_skill', 'N/A')
             if skill == "Intermediate": skill = "Inter"
 
             folder_data_list.append({
                 'name': name,
                 **scores,
-                'piece': gt_info.get('piece', 'N/A')[:40],
+                'piece': gt_info.get('piece', 'N/A')[:50],
                 'split': gt_info.get('split', 'N/A'),
                 'player': gt_info.get('P1_name', 'N/A'),
                 'skill': skill
@@ -192,7 +216,12 @@ class MidiEvaluatorApp:
                 if self.state == 'PIANO_ROLL_VIEW' and self.is_scrubbing:
                     self.is_scrubbing = False; self._set_playback_state(True)
             if event.type == pygame.MOUSEMOTION:
-                if self.state == 'PIANO_ROLL_VIEW' and self.is_scrubbing: self.handle_piano_roll_scrub(event.pos)
+                if self.state == 'PIANO_ROLL_VIEW':
+                    if self.is_scrubbing:
+                        self.handle_piano_roll_scrub(event.pos)
+                    self.check_feature_hover(event.pos)
+                else:
+                    self.active_tooltip = None
 
             if event.type == pygame.KEYDOWN:
                 if self.state == 'PIANO_ROLL_VIEW':
@@ -306,12 +335,12 @@ class MidiEvaluatorApp:
             self.piano_roll_view_options['show_pred'] = not self.piano_roll_view_options['show_pred']
             return
 
-        roll_rect = pygame.Rect(100, 100, SCREEN_WIDTH - 150, SCREEN_HEIGHT - 200)
+        roll_rect = pygame.Rect(250, 100, SCREEN_WIDTH - 300, SCREEN_HEIGHT - 250)
         if roll_rect.collidepoint(pos):
             self.is_scrubbing = True; self._set_playback_state(False); self.handle_piano_roll_scrub(pos)
 
     def handle_piano_roll_scrub(self, pos):
-        roll_rect = pygame.Rect(100, 100, SCREEN_WIDTH - 150, SCREEN_HEIGHT - 200)
+        roll_rect = pygame.Rect(250, 100, SCREEN_WIDTH - 300, SCREEN_HEIGHT - 250)
         if self.piano_roll_data.get('cut_length'):
             time_ratio = (pos[0] - roll_rect.x) / roll_rect.width
             seek_time_sec = time_ratio * self.piano_roll_data.get('cut_length', 0)
@@ -352,7 +381,7 @@ class MidiEvaluatorApp:
             total_segment_count = self.global_metadata.get('items', {}).get(selected_filename, {}).get('num_midi_segments_created', 0)
             file_metadata = self._load_file_evaluation_metadata(selected_filename)
             eval_data_for_file = file_metadata.get('segments', {})
-            
+
             segment_list = []
             for seg_num in range(1, total_segment_count + 1):
                 scores = eval_data_for_file.get(str(seg_num), {})
@@ -362,7 +391,7 @@ class MidiEvaluatorApp:
                     'r': scores.get('Recall', 0.0),
                     'f1': scores.get('F1-Score', 0.0)
                 })
-            
+
             self.detail_data['segment_list'] = segment_list
             self._sort_list(self.detail_data['segment_list'], self.segment_list_sort_config)
         except Exception as e:
@@ -375,55 +404,70 @@ class MidiEvaluatorApp:
             self.piano_roll_data = {}
             return
 
-        # 초기화
+        # Initialize
         pred_notes, gt_notes_in_segment = [], []
         matched_ref_indices, matched_est_indices = set(), set()
         frame_scores = {'p': 0.0, 'r': 0.0, 'f1': 0.0}
-        frame_counts = {'TP': 0, 'FP': 0, 'TN': 0}
+        frame_counts = {'TP': 0, 'FP': 0, 'TN': 0} # MODIFIED: FN -> TN
         audio_slice = None
         cut_length = 0
+        gt_features, pred_features = None, None
 
         try:
-            # --- 시간 및 경로 설정 ---
+            # --- Set up times and paths ---
             cut_length = self.global_metadata['midi_extractor_settings']['segment_length_sec']
             start_time = (self.selected_segment - 1) * cut_length
             end_time = start_time + cut_length
             selected_filename = self.selected_file_info['name']
             base_name = selected_filename.replace('_16020Hz', '')
+            pred_path = os.path.join(PREDICTED_MIDI_PATH, selected_filename, f"{self.selected_segment}.mid")
+            gt_path = os.path.join(GROUNDTRUTH_MIDI_PATH, 'midi', f"{base_name}.mid")
 
-            # --- 예측(Predicted) MIDI 로딩 ---
+            # --- Load Predicted MIDI ---
             try:
-                pred_path = os.path.join(PREDICTED_MIDI_PATH, selected_filename, f"{self.selected_segment}.mid")
                 if os.path.exists(pred_path):
                     pred_midi = pretty_midi.PrettyMIDI(pred_path)
-                    pred_notes = [note for inst in pred_midi.instruments for note in inst.notes]
-                else:
-                    print(f"Warning: Predicted MIDI not found at '{pred_path}'")
-            except Exception as e:
-                print(f"Error loading predicted MIDI: {e}")
+                    if pred_midi.instruments and pred_midi.instruments[0].notes:
+                        pred_notes = pred_midi.instruments[0].notes
+                else: print(f"Warning: Predicted MIDI not found at '{pred_path}'")
+            except Exception as e: print(f"Error loading predicted MIDI: {e}")
 
-            # --- 정답(Ground Truth) MIDI 로딩 ---
+            # --- Load Ground Truth MIDI ---
             try:
-                gt_path = os.path.join(GROUNDTRUTH_MIDI_PATH, 'midi', f"{base_name}.mid")
                 if os.path.exists(gt_path):
                     gt_midi = pretty_midi.PrettyMIDI(gt_path)
                     for inst in gt_midi.instruments:
                         for note in inst.notes:
                             if note.start < end_time and note.end > start_time:
                                 new_note = pretty_midi.Note(
-                                    velocity=note.velocity,
-                                    pitch=note.pitch,
+                                    velocity=note.velocity, pitch=note.pitch,
                                     start=max(0, note.start - start_time),
                                     end=min(cut_length, note.end - start_time)
                                 )
                                 if new_note.end > new_note.start:
                                     gt_notes_in_segment.append(new_note)
-                else:
-                    print(f"Warning: Ground truth MIDI not found at '{gt_path}'")
-            except Exception as e:
-                print(f"Error loading ground truth MIDI: {e}")
+                else: print(f"Warning: Ground truth MIDI not found at '{gt_path}'")
+            except Exception as e: print(f"Error loading ground truth MIDI: {e}")
 
-            # --- 노트 매칭 (mir_eval) ---
+            # --- Extract MIDI Features ---
+            if gt_notes_in_segment:
+                temp_gt_midi = pretty_midi.PrettyMIDI()
+                instrument = pretty_midi.Instrument(program=0)
+                instrument.notes.extend(gt_notes_in_segment)
+                temp_gt_midi.instruments.append(instrument)
+                temp_gt_path = "temp_gt_segment_features.mid"
+                temp_gt_midi.write(temp_gt_path)
+                gt_features_obj = MidiFeatures.MidiFeatures(temp_gt_path)
+                if gt_features_obj.available:
+                    gt_features = gt_features_obj.features
+                os.remove(temp_gt_path)
+
+            if os.path.exists(pred_path) and pred_notes:
+                pred_features_obj = MidiFeatures.MidiFeatures(pred_path)
+                if pred_features_obj.available:
+                    pred_features = pred_features_obj.features
+
+            # --- Note Matching (mir_eval) ---
             if gt_notes_in_segment and pred_notes:
                 ref_intervals_note = np.array([[n.start, n.end] for n in gt_notes_in_segment])
                 ref_pitches_note = np.array([n.pitch for n in gt_notes_in_segment])
@@ -436,24 +480,24 @@ class MidiEvaluatorApp:
                     matched_ref_indices = {m[0] for m in matching}
                     matched_est_indices = {m[1] for m in matching}
 
-            # --- 프레임 기반 점수 계산 ---
+            # --- Frame-based Score Calculation ---
             frame_len_sec = 0.01
             frame_times = np.arange(0, cut_length, frame_len_sec)
-            total_tp, total_fp, total_tn = 0, 0, 0
+            total_tp, total_fp, total_tn = 0, 0, 0 # MODIFIED: fn -> tn
             for time in frame_times:
                 true_pitches = {note.pitch for note in gt_notes_in_segment if note.start <= time < note.end}
                 pred_pitches = {note.pitch for note in pred_notes if note.start <= time < note.end}
                 total_tp += len(true_pitches.intersection(pred_pitches))
                 total_fp += len(pred_pitches.difference(true_pitches))
-                total_tn += len(true_pitches.difference(pred_pitches)) # Missed Note (FN 역할)
+                total_tn += len(true_pitches.difference(pred_pitches)) # MODIFIED: fn -> tn
 
             p = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
-            r = total_tp / (total_tp + total_tn) if (total_tp + total_tn) > 0 else 0.0
+            r = total_tp / (total_tp + total_tn) if (total_tp + total_tn) > 0 else 0.0 # MODIFIED: fn -> tn
             f1 = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
             frame_scores = {'p': p, 'r': r, 'f1': f1}
-            frame_counts = {'TP': total_tp, 'FP': total_fp, 'TN': total_tn}
+            frame_counts = {'TP': total_tp, 'FP': total_fp, 'TN': total_tn} # MODIFIED: FN -> TN
 
-            # --- 오디오 파일 로딩 및 자르기 ---
+            # --- Load and Slice Audio ---
             audio_path = os.path.join(GROUNDTRUTH_MIDI_PATH, 'audio', f"{selected_filename}.wav")
             if os.path.exists(audio_path):
                 full_audio = AudioSegment.from_wav(audio_path)
@@ -465,24 +509,20 @@ class MidiEvaluatorApp:
             print(f"An unexpected error occurred in load_piano_roll_data: {e}")
 
         finally:
-            # --- 최종 데이터 저장 (오류 발생 여부와 관계없이 실행) ---
             self.piano_roll_data = {
-                'pred_notes': pred_notes,
-                'gt_notes': gt_notes_in_segment,
-                'matched_ref_indices': matched_ref_indices,
-                'matched_est_indices': matched_est_indices,
-                'cut_length': cut_length,
-                'frame_scores': frame_scores,
-                'frame_counts': frame_counts,
-                'full_audio_slice': audio_slice
+                'pred_notes': pred_notes, 'gt_notes': gt_notes_in_segment,
+                'matched_ref_indices': matched_ref_indices, 'matched_est_indices': matched_est_indices,
+                'cut_length': cut_length, 'frame_scores': frame_scores, 'frame_counts': frame_counts,
+                'full_audio_slice': audio_slice, 'gt_features': gt_features, 'pred_features': pred_features
             }
 
-
     def draw(self):
-        screen.fill(COLORS['background']);
+        screen.fill(COLORS['background'])
         if self.state == 'FILE_SELECT': self.draw_file_select_screen()
         elif self.state == 'DETAIL_VIEW': self.draw_detail_view_screen()
         elif self.state == 'PIANO_ROLL_VIEW': self.draw_piano_roll_screen()
+        
+        self._draw_tooltip()
         pygame.display.flip()
 
     def _draw_table_header(self, y_pos, columns, sort_config):
@@ -491,7 +531,8 @@ class MidiEvaluatorApp:
         x_offset = 50
         for col_name, col_info in columns.items():
             label = col_info['label']
-            if col_info['key'] == sort_config['key']: label += " (asc)" if sort_config['ascending'] else " (desc)"
+            if col_info['key'] == sort_config['key']:
+                label += " (asc)" if sort_config['ascending'] else " (desc)"
             text_surf = FONT_SMALL.render(label, True, COLORS['text'])
             screen.blit(text_surf, (x_offset + 5, y_pos + 10))
             x_offset += col_info['width']
@@ -502,20 +543,20 @@ class MidiEvaluatorApp:
         list_rect = pygame.Rect(50, 90, SCREEN_WIDTH - 100, SCREEN_HEIGHT - 100)
         for i, folder_data in enumerate(self.audio_folders_data):
             y_pos = list_rect.y + i * 40 - self.file_scroll_y
-            if list_rect.top <= y_pos < list_rect.bottom:
+            if list_rect.top <= y_pos < list_rect.bottom - 40:
                 item_rect = pygame.Rect(list_rect.x, y_pos, list_rect.width, 40)
                 if item_rect.collidepoint(pygame.mouse.get_pos()): pygame.draw.rect(screen, COLORS['button_hover'], item_rect)
                 x_offset = 50
                 record_time_full = folder_data['name'].replace('_16020Hz', '')
-                
+
                 try:
                     segs = record_time_full.split('_')
-                    display_name = segs[0][2:] + ' :  ' + segs[1].replace('-',':')
+                    display_name = segs[0][2:] + ' ' + segs[1].replace('-',':')
                 except IndexError:
                     display_name = record_time_full
                 col_data = {'index': str(i + 1), 'name': display_name, 'p': f"{folder_data['p']:.4f}", 'r': f"{folder_data['r']:.4f}", 'f1': f"{folder_data['f1']:.4f}", 'piece': folder_data.get('piece', 'N/A'), 'player': folder_data.get('player', 'N/A'), 'skill': folder_data.get('skill', 'N/A'), 'split': folder_data.get('split', 'N/A')}
                 for col_name, col_info in self.FILE_COLUMNS.items():
-                    text_surf = FONT_SMALL.render(col_data[col_info['key']], True, COLORS['text'])
+                    text_surf = FONT_SMALL.render(str(col_data.get(col_info['key'], '')), True, COLORS['text'])
                     screen.blit(text_surf, (x_offset + 5, item_rect.y + 10))
                     x_offset += col_info['width']
 
@@ -534,26 +575,70 @@ class MidiEvaluatorApp:
         if self.detail_data.get('segment_list'):
             for i, seg_data in enumerate(self.detail_data['segment_list']):
                 y_pos = list_rect.y + i * 35 - self.segment_scroll_y
-                if list_rect.top <= y_pos < list_rect.bottom:
+                if list_rect.top <= y_pos < list_rect.bottom - 35:
                     item_rect = pygame.Rect(list_rect.x, y_pos, list_rect.width, 35)
                     if item_rect.collidepoint(pygame.mouse.get_pos()): pygame.draw.rect(screen, COLORS['button_hover'], item_rect)
                     x_offset = 50
                     col_data = {'index': str(i + 1), 'num': str(seg_data['num']), 'p': f"{seg_data['p']:.4f}", 'r': f"{seg_data['r']:.4f}", 'f1': f"{seg_data['f1']:.4f}"}
                     for col_name, col_info in self.SEGMENT_COLUMNS.items():
-                        text_surf = FONT_SMALL.render(col_data[col_info['key']], True, COLORS['text'])
+                        text_surf = FONT_SMALL.render(str(col_data.get(col_info['key'], '')), True, COLORS['text'])
                         screen.blit(text_surf, (x_offset + 10, item_rect.y + 8))
                         x_offset += col_info['width']
 
-    def _draw_legend(self, start_x, start_y):
+    def check_feature_hover(self, pos):
+        table_rect = pygame.Rect(250, SCREEN_HEIGHT - 150 + 20, SCREEN_WIDTH - 300, 90)
+        num_cols = len(self.features_info)
+        col_width = table_rect.width / num_cols
+        x_offset = table_rect.x
+
+        for label, (key, fmt, desc) in self.features_info.items():
+            cell_rect = pygame.Rect(x_offset, table_rect.y, col_width, table_rect.height)
+            if cell_rect.collidepoint(pos):
+                self.active_tooltip = {'text': desc, 'pos': pos}
+                return
+            x_offset += col_width
+        self.active_tooltip = None
+
+    def _draw_tooltip(self):
+        if not self.active_tooltip: return
+
+        text_surf = FONT_TINY.render(self.active_tooltip['text'], True, COLORS['tooltip_text'])
+        padding = 8
+        bg_rect = text_surf.get_rect().inflate(padding * 2, padding * 2)
+        
+        mouse_pos = self.active_tooltip['pos']
+        bg_rect.bottomleft = (mouse_pos[0] + 15, mouse_pos[1] - 5)
+        
+        if bg_rect.right > SCREEN_WIDTH: bg_rect.right = SCREEN_WIDTH - 5
+        if bg_rect.left < 0: bg_rect.left = 5
+        if bg_rect.top < 0: bg_rect.top = 5
+        
+        pygame.draw.rect(screen, COLORS['tooltip_bg'], bg_rect, border_radius=5)
+        screen.blit(text_surf, (bg_rect.x + padding, bg_rect.y + padding))
+
+    def _draw_legend_and_controls(self, start_x, start_y):
+        y_offset = 0
         show_gt = self.piano_roll_view_options['show_gt']
         show_pred = self.piano_roll_view_options['show_pred']
-        y_offset = 0
+        checkbox_size = 20
+
+        gt_rect = pygame.Rect(start_x, start_y + y_offset, checkbox_size, checkbox_size)
+        self.piano_roll_view_options['gt_checkbox_rect'] = gt_rect
+        pygame.draw.rect(screen, COLORS['checkbox_border'], gt_rect, 2, border_radius=3)
+        screen.blit(FONT_SMALL.render("GT MIDI (W)", True, COLORS['text']), (gt_rect.x + 30, gt_rect.y - 2))
+        if show_gt: pygame.draw.rect(screen, COLORS['checkbox_checked'], gt_rect.inflate(-6, -6), border_radius=3)
+        y_offset += 35
+
+        pred_rect = pygame.Rect(start_x, start_y + y_offset, checkbox_size, checkbox_size)
+        self.piano_roll_view_options['pred_checkbox_rect'] = pred_rect
+        pygame.draw.rect(screen, COLORS['checkbox_border'], pred_rect, 2, border_radius=3)
+        screen.blit(FONT_SMALL.render("Pred MIDI (S)", True, COLORS['text']), (pred_rect.x + 30, pred_rect.y - 2))
+        if show_pred: pygame.draw.rect(screen, COLORS['checkbox_checked'], pred_rect.inflate(-6, -6), border_radius=3)
+        y_offset += 55
 
         legend_items = []
         if show_gt and show_pred:
-            legend_items = [("Correct (TP)", COLORS['tp_green'], 'fill'),
-                            ("Extra Detected Note (FP)", COLORS['fp_red_outline'], 'outline'),
-                            ("Missed Note (FN)", COLORS['fn_yellow_fill'], 'fill')]
+            legend_items = [("Correct (TP)", COLORS['tp_green'], 'fill'), ("Extra Note (FP)", COLORS['fp_red_outline'], 'outline'), ("Missed Note (TN)", COLORS['fn_yellow_fill'], 'fill')]
         elif show_gt:
             legend_items = [("Ground Truth Note", COLORS['gt_only_color'], 'fill')]
         elif show_pred:
@@ -561,20 +646,55 @@ class MidiEvaluatorApp:
 
         for label, color, style in legend_items:
             swatch_rect = pygame.Rect(start_x, start_y + y_offset, 20, 15)
-            if style == 'fill':
-                pygame.draw.rect(screen, color, swatch_rect, border_radius=3)
-            else:
-                pygame.draw.rect(screen, color, swatch_rect, 2, border_radius=3)
+            if style == 'fill': pygame.draw.rect(screen, color, swatch_rect, border_radius=3)
+            else: pygame.draw.rect(screen, color, swatch_rect, 2, border_radius=3)
             text_surf = FONT_SMALL.render(label, True, COLORS['text'])
             screen.blit(text_surf, (start_x + 30, start_y + y_offset - 2))
             y_offset += 30
+
+    def _draw_midi_features_table(self, rect):
+        gt_f = self.piano_roll_data.get('gt_features')
+        if not gt_f: return
+
+        pygame.draw.rect(screen, COLORS['header'], rect, border_radius=5)
+        pygame.draw.rect(screen, COLORS['grid_line'], rect, 1, border_radius=5)
+
+        title_surf = FONT_SMALL.render("Ground Truth MIDI Features", True, COLORS['text'])
+        screen.blit(title_surf, (rect.x + 10, rect.y + 5))
+        
+        num_cols = len(self.features_info)
+        col_width = rect.width / num_cols
+        table_y = rect.y + 35
+        cell_height = rect.height - 38
+        x_offset = rect.x
+
+        for label, (key, fmt, desc) in self.features_info.items():
+            cell_rect = pygame.Rect(x_offset, table_y, col_width, cell_height)
+
+            label_surf = FONT_TINY.render(label, True, COLORS['gt_only_color'])
+            label_rect = label_surf.get_rect(centerx=cell_rect.centerx, top=cell_rect.top + 8)
+            screen.blit(label_surf, label_rect)
+            
+            val_str = "N/A"
+            if key in gt_f:
+                val = gt_f[key]
+                try: val_str = fmt.format(val)
+                except (ValueError, TypeError): val_str = str(val)
+
+            value_surf = FONT_SMALL.render(val_str, True, COLORS['text'])
+            value_rect = value_surf.get_rect(centerx=cell_rect.centerx, bottom=cell_rect.bottom - 8)
+            screen.blit(value_surf, value_rect)
+
+            x_offset += col_width
+            if x_offset < rect.right:
+                pygame.draw.line(screen, COLORS['grid_line'], (x_offset, table_y), (x_offset, table_y + cell_height))
 
     def _draw_piano_roll_stats(self):
         if not self.piano_roll_data: return
         scores = self.piano_roll_data.get('frame_scores', {})
         counts = self.piano_roll_data.get('frame_counts', {})
         score_text = f"Frame Precision: {scores.get('p', 0):.4f}   Recall: {scores.get('r', 0):.4f}   F1-Score: {scores.get('f1', 0):.4f}"
-        count_text = f"Frame TP: {counts.get('TP', 0)}   Extra Detected Note (FP): {counts.get('FP', 0)}   Missed Note (TN): {counts.get('TN', 0)}"
+        count_text = f"Frame TP: {counts.get('TP', 0)}   Extra Notes (FP): {counts.get('FP', 0)}   Missed Notes (TN): {counts.get('TN', 0)}" # MODIFIED: FN -> TN
         score_surf = FONT_SMALL.render(score_text, True, COLORS['text'])
         count_surf = FONT_SMALL.render(count_text, True, COLORS['text'])
         screen.blit(score_surf, (50, 45)); screen.blit(count_surf, (50, 70))
@@ -604,7 +724,7 @@ class MidiEvaluatorApp:
 
         self._draw_piano_roll_stats()
 
-        roll_rect = pygame.Rect(100, 100, SCREEN_WIDTH - 150, SCREEN_HEIGHT - 200)
+        roll_rect = pygame.Rect(250, 100, SCREEN_WIDTH - 300, SCREEN_HEIGHT - 250)
         pygame.draw.rect(screen, COLORS['piano_roll_bg'], roll_rect)
         if not self.piano_roll_data: return
         min_pitch, max_pitch = 21, 108; pitch_span = max_pitch - min_pitch
@@ -616,14 +736,14 @@ class MidiEvaluatorApp:
             pitch = 12 * (i + 1)
             if min_pitch <= pitch <= max_pitch:
                 y = roll_rect.bottom - ((pitch - min_pitch) / pitch_span) * roll_rect.height
-                screen.blit(FONT_SMALL.render(f"C{i}", True, COLORS['text']), (roll_rect.left - 50, y - 10))
+                screen.blit(FONT_SMALL.render(f"C{i}", True, COLORS['text']), (roll_rect.left - 40, y - 10))
 
-        note_height = roll_rect.height / pitch_span
+        note_height = roll_rect.height / pitch_span if pitch_span > 0 else 0
         time_span = self.piano_roll_data.get('cut_length', 0)
         show_gt = self.piano_roll_view_options['show_gt']
         show_pred = self.piano_roll_view_options['show_pred']
 
-        if time_span > 0: # time_span이 0일 경우 DivisionByZeroError 방지
+        if time_span > 0:
             if show_gt and show_pred:
                 for gt_idx, gt_note in enumerate(self.piano_roll_data['gt_notes']):
                     x = roll_rect.x + (gt_note.start / time_span) * roll_rect.width
@@ -631,7 +751,6 @@ class MidiEvaluatorApp:
                     width = max(1, (gt_note.end - gt_note.start) / time_span * roll_rect.width)
                     color = COLORS['tp_green'] if gt_idx in self.piano_roll_data['matched_ref_indices'] else COLORS['fn_yellow_fill']
                     pygame.draw.rect(screen, color, (x, y, width, note_height), border_radius=2)
-
                 for pred_idx, pred_note in enumerate(self.piano_roll_data['pred_notes']):
                     if pred_idx not in self.piano_roll_data['matched_est_indices']:
                         x = roll_rect.x + (pred_note.start / time_span) * roll_rect.width
@@ -640,14 +759,12 @@ class MidiEvaluatorApp:
                         pygame.draw.rect(screen, COLORS['fp_red_outline'], (x, y, width, note_height), 2, border_radius=2)
             elif show_gt:
                 for gt_note in self.piano_roll_data['gt_notes']:
-                    x = roll_rect.x + (gt_note.start / time_span) * roll_rect.width
-                    y = roll_rect.bottom - ((gt_note.pitch - min_pitch + 1) / pitch_span) * roll_rect.height
+                    x, y = roll_rect.x + (gt_note.start / time_span) * roll_rect.width, roll_rect.bottom - ((gt_note.pitch - min_pitch + 1) / pitch_span) * roll_rect.height
                     width = max(1, (gt_note.end - gt_note.start) / time_span * roll_rect.width)
                     pygame.draw.rect(screen, COLORS['gt_only_color'], (x, y, width, note_height), border_radius=2)
             elif show_pred:
                 for pred_note in self.piano_roll_data['pred_notes']:
-                    x = roll_rect.x + (pred_note.start / time_span) * roll_rect.width
-                    y = roll_rect.bottom - ((pred_note.pitch - min_pitch + 1) / pitch_span) * roll_rect.height
+                    x, y = roll_rect.x + (pred_note.start / time_span) * roll_rect.width, roll_rect.bottom - ((pred_note.pitch - min_pitch + 1) / pitch_span) * roll_rect.height
                     width = max(1, (pred_note.end - pred_note.start) / time_span * roll_rect.width)
                     pygame.draw.rect(screen, COLORS['pred_only_color'], (x, y, width, note_height), border_radius=2)
 
@@ -656,28 +773,21 @@ class MidiEvaluatorApp:
             if roll_rect.left <= line_x <= roll_rect.right:
                 pygame.draw.line(screen, COLORS['playback_line'], (line_x, roll_rect.top), (line_x, roll_rect.bottom), 2)
 
-        checkbox_start_x = 120
-        checkbox_start_y = roll_rect.bottom + 30
-        checkbox_size = 20
-
-        gt_rect = pygame.Rect(checkbox_start_x, checkbox_start_y, checkbox_size, checkbox_size)
-        self.piano_roll_view_options['gt_checkbox_rect'] = gt_rect
-        pygame.draw.rect(screen, COLORS['checkbox_border'], gt_rect, 2, border_radius=3)
-        screen.blit(FONT_SMALL.render("GroundTruth MIDI (W)", True, COLORS['text']), (gt_rect.x + 30, gt_rect.y - 2))
-        if show_gt: pygame.draw.rect(screen, COLORS['checkbox_checked'], gt_rect.inflate(-6, -6), border_radius=3)
-
-        pred_rect = pygame.Rect(checkbox_start_x, checkbox_start_y + 35, checkbox_size, checkbox_size)
-        self.piano_roll_view_options['pred_checkbox_rect'] = pred_rect
-        pygame.draw.rect(screen, COLORS['checkbox_border'], pred_rect, 2, border_radius=3)
-        screen.blit(FONT_SMALL.render("Predicted MIDI (S)", True, COLORS['text']), (pred_rect.x + 30, pred_rect.y - 2))
-        if show_pred: pygame.draw.rect(screen, COLORS['checkbox_checked'], pred_rect.inflate(-6, -6), border_radius=3)
-
-        self._draw_legend(checkbox_start_x + 280, checkbox_start_y)
+        # --- Draw Controls & Features ---
+        self._draw_legend_and_controls(30, 150)
+        features_rect = pygame.Rect(250, roll_rect.bottom + 20, roll_rect.width, 90)
+        self._draw_midi_features_table(features_rect)
 
 
 if __name__ == '__main__':
     if not os.path.exists(PREDICTED_MIDI_PATH) or not os.path.exists(GROUNDTRUTH_MIDI_PATH):
-        print("Error: Please update PREDICTED_MIDI_PATH and GROUNDTRUTH_MIDI_PATH in the script.")
+        print("="*60)
+        print("! ! ! CONFIGURATION ERROR ! ! !")
+        print(f"Cannot find PREDICTED_MIDI_PATH or GROUNDTRUTH_MIDI_PATH.")
+        print("Please correctly modify the path settings at the top of the script.")
+        print(f"Predicted MIDI Path: {PREDICTED_MIDI_PATH}")
+        print(f"Ground Truth MIDI Path: {GROUNDTRUTH_MIDI_PATH}")
+        print("="*60)
     else:
         app = MidiEvaluatorApp()
         app.run()

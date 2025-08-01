@@ -2,6 +2,7 @@ import os
 import json
 import numpy as np
 import matplotlib.pyplot as plt
+import MidiFeatures
 
 from midi import load_midi, slice_midi
 from MidiEvaluator import MidiEvaluator
