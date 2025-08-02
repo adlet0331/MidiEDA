@@ -31,7 +31,8 @@ class MidiFeatures:
         # 음정 분포
         pitch_dist = [self.notes[i].pitch for i in range(len(self.notes))]
         self.features['pitch_dist'] = np.bincount(pitch_dist, minlength=88) / len(pitch_dist)
-        self.numeric_features['pitch_entropy'] = - np.sum(np.where(self.features['pitch_dist'] > 0, self.features['pitch_dist'] * np.log2(self.features['pitch_dist']), 0))
+        pitch_dist_nonzero = self.features['pitch_dist'][self.features['pitch_dist'] > 0]
+        self.numeric_features['pitch_entropy'] = - np.sum(np.where(pitch_dist_nonzero > 0, pitch_dist_nonzero * np.log2(pitch_dist_nonzero), 0))
         # Pitch Range 대신 Highest Pitch와 Lowest Pitch를 사용
         #self.numeric_features['pitch_range'] = self.numeric_features['highest_pitch'] - self.numeric_features['lowest_pitch']
         self.numeric_features['highest_pitch'] = np.max([note.pitch for note in self.notes])
@@ -40,9 +41,16 @@ class MidiFeatures:
 
         # Timing 관련 분포
         onsets = [note.start for note in self.notes]
+        onsets.sort(reverse=False)
         iois = np.diff(onsets)
-        self.features['ioi_mean'] = np.mean(iois)
-        self.features['ioi_std'] = np.std(iois)
+        iois = iois[iois > 0]  # Remove non-positive intervals
+        if len(iois) == 0:
+            self.numeric_features['ioi_mean'] = 0
+            self.numeric_features['ioi_entropy'] = 0
+        else:
+            self.numeric_features['ioi_mean'] = np.mean(iois)
+            iois = iois / np.sum(iois)  # Normalize to sum to 1
+            self.numeric_features['ioi_entropy'] = - np.sum(iois * np.log2(iois))
 
         ### 추가한 Audio Model 관련 Feature들
         ### 1. Note-based Feature 추출
