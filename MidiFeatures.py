@@ -20,43 +20,23 @@ class MidiFeatures:
             return
         self.notes = self.midi.instruments[0].notes if len(self.midi.instruments) > 0 else []
         self.features = {}
+        self.numeric_features = {}
         self.extract_features()
     
+    # MIDI 파일에서 Feature를 추출하는 메소드
     def extract_features(self):
-        # 1. 기본 MIDI Feature, Note-based Feature 추출
+        ### 논문에서 제안된 Feature들
+        # Towards Explainable and Interpretable Musical Difficulty Estimation: A parameter-efficient approach
+        
         # 음정 분포
-        pitch_classes = [self.notes[i].pitch % 12 for i in range(len(self.notes))]
-        self.features['pitch_classes'] = pitch_classes
-        self.features['pitch_hist'] = np.bincount(pitch_classes, minlength=12) / len(pitch_classes)
-
-        # 음역대
-        self.features['highest_pitch'] = np.max([note.pitch for note in self.notes])
-        self.features['lowest_pitch'] = np.min([note.pitch for note in self.notes])
-        self.features['pitch_range'] = self.features['highest_pitch'] - self.features['lowest_pitch']
-
-        # 음표 길이
-        note_lengths = [note.end - note.start for note in self.notes]
-        self.features['average_note_length'] = np.mean(note_lengths)
-        self.features['max_note_length'] = np.max(note_lengths)
-        self.features['min_note_length'] = np.min(note_lengths)
-
-        # 음표 밀도
-        total_duration = self.midi.get_end_time()
-        self.features['note_density'] = len(self.notes) / total_duration if total_duration > 0 else 0
-
-        # Polyphony (동시 발음 음 개수)
-        piano_roll = self.midi.get_piano_roll()
-        self.features['polyphony'] = np.mean(np.count_nonzero(piano_roll, axis=0))
-
-        # Interval (인접 노트간 음정 간격)
-        self.features['intervals'] = [abs(self.notes[i+1].pitch - self.notes[i].pitch) for i in range(len(self.notes)-1)]
-        self.features['interval_mean'] = np.mean(self.features['intervals'])
-        self.features['interval_std'] = np.std(self.features['intervals'])
-
-        # 3. Performance-based Feature 추출
-        # Velocity 분포
-        velocities = [note.velocity for note in self.notes]
-        self.features['velocity_hist'] = np.bincount(velocities, minlength=128) / len(velocities)
+        pitch_dist = [self.notes[i].pitch for i in range(len(self.notes))]
+        self.features['pitch_dist'] = np.bincount(pitch_dist, minlength=88) / len(pitch_dist)
+        self.numeric_features['pitch_entropy'] = - np.sum(np.where(self.features['pitch_dist'] > 0, self.features['pitch_dist'] * np.log2(self.features['pitch_dist']), 0))
+        # Pitch Range 대신 Highest Pitch와 Lowest Pitch를 사용
+        #self.numeric_features['pitch_range'] = self.numeric_features['highest_pitch'] - self.numeric_features['lowest_pitch']
+        self.numeric_features['highest_pitch'] = np.max([note.pitch for note in self.notes])
+        self.numeric_features['lowest_pitch'] = np.min([note.pitch for note in self.notes])
+        self.numeric_features['average_pitch'] = np.mean([note.pitch for note in self.notes])
 
         # Timing 관련 분포
         onsets = [note.start for note in self.notes]
@@ -64,8 +44,41 @@ class MidiFeatures:
         self.features['ioi_mean'] = np.mean(iois)
         self.features['ioi_std'] = np.std(iois)
 
+        ### 추가한 Audio Model 관련 Feature들
+        ### 1. Note-based Feature 추출
+        # 음표 길이
+        self.features['note_lengths'] = [note.end - note.start for note in self.notes]
+        self.numeric_features['average_note_length'] = np.mean(self.features['note_lengths'])
+        self.numeric_features['max_note_length'] = np.max(self.features['note_lengths'])
+        self.numeric_features['min_note_length'] = np.min(self.features['note_lengths'])
+
+        # 음표 밀도
+        self.numeric_features['total_duration'] = self.midi.get_end_time()
+        self.numeric_features['note_density'] = len(self.notes) / self.numeric_features['total_duration'] if self.numeric_features['total_duration'] > 0 else 0
+
+        # Polyphony (동시 발음 음 개수)
+        piano_roll = self.midi.get_piano_roll()
+        self.numeric_features['average_polyphony'] = np.mean(np.count_nonzero(piano_roll, axis=0))
+        self.numeric_features['max_polyphony'] = np.max(np.count_nonzero(piano_roll, axis=0))
+
+        # Interval (인접 노트간 음정 간격)
+        self.features['intervals'] = [abs(self.notes[i+1].pitch - self.notes[i].pitch) for i in range(len(self.notes)-1)]
+        self.numeric_features['interval_mean'] = np.mean(self.features['intervals'])
+
+        # Velocity 분포
+        velocities = [note.velocity for note in self.notes]
+        self.features['velocity_hist'] = np.bincount(velocities, minlength=128) / len(velocities)
+
+    def get_numeric_features_np(self):
+        if not self.available:
+            return None
+        # Feature들을 numpy array로 변환하여 반환
+        features_np = [numeric_feature for numeric_feature in self.numeric_features.values()]
+        # 14개의 feature를 numpy array로 변환
+        return np.array(features_np)
+
     # MIDI Feature 정보를 string으로 요약해서 반환
-    def get_features_info(self):
+    def get_features_info_string(self):
         if not self.available:
             return "MIDI features are not available due to missing or invalid MIDI file."
         info = "MIDI Features:\n"

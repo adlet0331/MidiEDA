@@ -75,18 +75,19 @@ class MidiEvaluatorApp:
         }
         
         self.features_info = {
+            'Pitch Entropy': ('pitch_entropy', '{:.2f}', 'Pitch entropy across the segment.'),
             'Hi-Pitch': ('highest_pitch', '{}', 'Highest pitch (MIDI note) in the segment.'),
             'Lo-Pitch': ('lowest_pitch', '{}', 'Lowest pitch (MIDI note) in the segment.'),
-            'Range': ('pitch_range', '{}', 'Difference between highest and lowest pitch.'),
+            'Avg Pitch': ('average_pitch', '{:.2f}', 'Average pitch (MIDI note) in the segment.'),
+            'Avg IOI': ('ioi_mean', '{:.2f}s', 'Average Inter-Onset-Interval (time between note starts).'),
+            'IOI Std': ('ioi_std', '{:.2f}s', 'Standard deviation of IOIs.'),
             'Density': ('note_density', '{:.2f}', 'Average number of notes per second.'),
-            'Polyphony': ('polyphony', '{:.2f}', 'Average number of notes playing simultaneously.'),
+            'Avg Polyphony': ('average_polyphony', '{:.2f}', 'Average number of notes playing simultaneously.'),
+            'Max Polyphony': ('max_polyphony', '{:.2f}', 'Maximum number of notes playing simultaneously.'),
             'Avg Len': ('average_note_length', '{:.2f}s', 'Average duration of a single note.'),
             'Max Len': ('max_note_length', '{:.2f}s', 'Duration of the longest note.'),
             'Min Len': ('min_note_length', '{:.2f}s', 'Duration of the shortest note.'),
             'Avg Int': ('interval_mean', '{:.2f}', 'Average pitch interval between consecutive notes.'),
-            'Int Std': ('interval_std', '{:.2f}', 'Standard deviation of pitch intervals.'),
-            'Avg IOI': ('ioi_mean', '{:.2f}s', 'Average Inter-Onset-Interval (time between note starts).'),
-            'IOI Std': ('ioi_std', '{:.2f}s', 'Standard deviation of IOIs.'),
         }
 
         self.file_list_sort_config = {'key': 'f1', 'ascending': True}
@@ -459,13 +460,13 @@ class MidiEvaluatorApp:
                 temp_gt_midi.write(temp_gt_path)
                 gt_features_obj = MidiFeatures.MidiFeatures(temp_gt_path)
                 if gt_features_obj.available:
-                    gt_features = gt_features_obj.features
+                    gt_features = gt_features_obj.numeric_features
                 os.remove(temp_gt_path)
 
             if os.path.exists(pred_path) and pred_notes:
                 pred_features_obj = MidiFeatures.MidiFeatures(pred_path)
                 if pred_features_obj.available:
-                    pred_features = pred_features_obj.features
+                    pred_features = pred_features_obj.numeric_features
 
             # --- Note Matching (mir_eval) ---
             if gt_notes_in_segment and pred_notes:
