@@ -434,7 +434,7 @@ class MidiEvaluatorApp:
         list_rect = pygame.Rect(50, 90, SCREEN_WIDTH - 100, SCREEN_HEIGHT - 100)
         for i, folder_data in enumerate(self.audio_folders_data):
             y_pos = list_rect.y + i * 40 - self.file_scroll_y
-            if list_rect.top <= y_pos < list_rect.bottom - 40:
+            if list_rect.top <= y_pos < list_rect.bottom:
                 item_rect = pygame.Rect(list_rect.x, y_pos, list_rect.width, 40)
                 if item_rect.collidepoint(pygame.mouse.get_pos()): pygame.draw.rect(screen, COLORS['button_hover'], item_rect)
                 x_offset = 50; record_time_full = folder_data['name'].replace('_16020Hz', '')
@@ -463,7 +463,7 @@ class MidiEvaluatorApp:
         if self.detail_data.get('segment_list'):
             for i, seg_data in enumerate(self.detail_data['segment_list']):
                 y_pos = list_rect.y + i * 35 - self.segment_scroll_y
-                if list_rect.top <= y_pos < list_rect.bottom - 35:
+                if list_rect.top <= y_pos < list_rect.bottom:
                     item_rect = pygame.Rect(list_rect.x, y_pos, sum(c['width'] for c in self.dynamic_segment_columns.values()), 35)
                     if item_rect.collidepoint(pygame.mouse.get_pos()): pygame.draw.rect(screen, COLORS['button_hover'], item_rect)
                     x_offset = 50; base_data = {'index': str(i + 1), 'num': str(seg_data['num']), 'p': f"{seg_data['p']:.4f}", 'r': f"{seg_data['r']:.4f}", 'f1': f"{seg_data['f1']:.4f}"}
