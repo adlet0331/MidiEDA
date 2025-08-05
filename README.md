@@ -3,3 +3,4 @@
 ## Required
 /_transcribed_MIDI/   
 FluidR3_GM.sf2
+constants.py

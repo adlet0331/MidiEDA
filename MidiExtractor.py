@@ -64,7 +64,7 @@ class MidiExtractor:
     여러 개의 분할된 MIDI 파일로 출력합니다.
     """
     def __init__(self, model, extract_mode: ExtractMode, segment_length_sec=2.5,
-                 transcribe_batch_size=AUDIO_TRANSCRIBE_BATCH_SIZE, save_total_midi: bool = True, # ✅ 전체 MIDI 저장 옵션 추가
+                 transcribe_batch_size=AUDIO_TRANSCRIBE_BATCH_SIZE, save_total_midi: bool = True,
                  input_transcriptor=AudioLoader(), hop_size=HOP_LENGTH,
                  sample_rate=SAMPLE_RATE, min_midi=MIN_MIDI, max_midi=MAX_MIDI):
 
@@ -74,7 +74,7 @@ class MidiExtractor:
         self.batch_size = transcribe_batch_size
         if extract_mode == ExtractMode.INPUT_CUT_AND_EXTRACT:
             self.batch_size = 1
-        self.save_total_midi = save_total_midi # ✅ 옵션 저장
+        self.save_total_midi = save_total_midi
         self.input_transcriptor = input_transcriptor
         self.hop_size = hop_size
         self.sample_rate = sample_rate

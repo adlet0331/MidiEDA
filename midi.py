@@ -115,24 +115,42 @@ def save_midi(path, pitches, intervals, velocities) -> None:
 
     file.save(path)
 
+import numpy as np
 
-if __name__ == '__main__':
+def notes_to_piano_roll(notes, fs=120, max_time=None):
+    """
+    Converts notes lists to a piano roll (numpy array).
 
-    def process(input_file, output_file):
-        midi_data = load_midi(input_file)
-        np.savetxt(output_file, midi_data, '%.6f', '\t', header='onset\toffset\tnote\tvelocity')
+    Args:
+        notes (list): A list of note objects containing pitch, start, end, and velocity.
+        fs (int): The sampling rate for the piano roll (frames per second).
+        max_time (float, optional): The maximum time for the piano roll. 
+                                    If None, it's determined by the longest note.
 
+    Returns:
+        np.ndarray: A 2D numpy array representing the piano roll.
+                    Rows are pitches (0-127), columns are time steps.
+    """
+    if not notes:
+        return np.array([])
 
-    def files():
-        for input_file in tqdm(sys.argv[1:]):
-            if input_file.endswith('.mid'):
-                output_file = input_file[:-4] + '.tsv'
-            elif input_file.endswith('.midi'):
-                output_file = input_file[:-5] + '.tsv'
-            else:
-                print('ignoring non-MIDI file %s' % input_file, file=sys.stderr)
-                continue
+    if max_time is None:
+        max_time = max(note.end for note in notes)
 
-            yield (input_file, output_file)
+    # Determine the number of time steps
+    n_steps = int(np.ceil(max_time * fs))
+    
+    # Initialize piano roll with zeros (no notes playing)
+    piano_roll = np.zeros((128, n_steps), dtype=np.uint8) 
 
-    Parallel(n_jobs=multiprocessing.cpu_count())(delayed(process)(in_file, out_file) for in_file, out_file in files())
+    for note in notes:
+        start_idx = int(note.start * fs)
+        end_idx = int(note.end * fs)
+        # Ensure indices are within bounds
+        start_idx = max(0, start_idx)
+        end_idx = min(n_steps, end_idx) 
+        
+        # Set the velocity for the duration of the note
+        piano_roll[int(note.pitch), start_idx:end_idx] = int(note.velocity)
+        
+    return piano_roll

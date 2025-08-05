@@ -3,15 +3,22 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from PIL import Image
+from MidiFeatures import MidiFeatures
 
 class NumpyFloatEncoder(json.JSONEncoder):
     """Encoder class to save numpy float types to json."""
     def default(self, obj):
         if isinstance(obj, np.floating):
             return float(round(obj, 4))
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
         return json.JSONEncoder.default(self, obj)
-
-class MetadataAnalyzer:
+    
+# Evaluate한 MIDI 파일의 통계 및 그래프를 생성하는 클래스
+# 각 파일의 평가 메타데이터를 분석하고, 분포 그래프 이미지를 생성합니다.
+class ScorePlotter:
     """
     Analyzes music transcription evaluation metadata and generates statistics
     and graphs for each file.
@@ -151,3 +158,68 @@ class MetadataAnalyzer:
         else:
             print("-" * 60)
             print(f"\nFinished analysis for a total of {found_files} files!")
+
+# GroundTruth Midi에 대해 Feature 추출을 수행하는 클래스
+class FeatureExtractor:
+    def __init__(self, midi_folder: str, segment_length_sec: float = 5):
+        """
+        Initializes the feature extractor with the MIDI folder path.
+        Args:
+            midi_folder (str): The path to the folder containing MIDI files.
+        """
+        self.midi_folder = midi_folder
+        self.metadata_path = os.path.join(midi_folder, 'features_metadata.json')
+        self.segment_length_sec = segment_length_sec
+
+        if not os.path.exists(self.midi_folder):
+            raise FileNotFoundError(f"MIDI folder not found: {self.midi_folder}")
+
+        self.metadata_folder = os.path.join(self.midi_folder, 'features_metadata')
+        if not os.path.exists(self.metadata_folder):
+            print(f"Creating metadata folder: {self.metadata_folder}")
+            os.mkdir(self.metadata_folder)
+
+        self.extract_folder_features()
+
+        print(f"Feature extraction completed for MIDI files in '{self.midi_folder}'.")
+
+    def extract_folder_features(self):
+        """
+        Extracts features from all MIDI files in the specified folder.
+        """
+        midi_files = [f for f in os.listdir(self.midi_folder) if f.endswith('.mid')]
+        file_features_metadata = {}
+
+        for midi_file in midi_files:
+            midi_path = os.path.join(self.midi_folder, midi_file)
+            print(f"Extracting features from: {midi_file}")
+            feature_extractor = MidiFeatures(midi_path)
+            file_features_metadata[midi_file] = {
+                "available": feature_extractor.available,
+                "segment_length_sec": self.segment_length_sec,
+                "file_name": midi_file,
+                "numeric_features": feature_extractor.numeric_features,
+                "features": feature_extractor.iterable_features
+            }
+            segment_features_metadata = {
+                "available": feature_extractor.available,
+                "segment_length_sec": self.segment_length_sec,
+                "file_name": midi_file,
+                "features": feature_extractor.numeric_features,
+                "items": {}
+            }
+            segment_features = feature_extractor.extract_features_segments(self.segment_length_sec)
+            if feature_extractor.available:
+                for _, (segment_num, segment_data) in enumerate(segment_features.items()):
+                    segment_features_metadata["items"][f"{segment_num + 1}"] = segment_data
+                    
+            json.dump(segment_features_metadata,
+                      open(os.path.join(self.metadata_folder, f"{midi_file.replace('.mid', '')}.json"), 'w', encoding='utf-8'),
+                      indent=4, cls=NumpyFloatEncoder, ensure_ascii=False)
+            print(f"  - Features saved for {midi_file}")
+
+        json.dump(file_features_metadata, 
+                    open(self.metadata_path, 'w', encoding='utf-8'), 
+                    indent=4, cls=NumpyFloatEncoder, ensure_ascii=False)
+        
+        print(f"Feature metadata saved to: {self.metadata_folder}")

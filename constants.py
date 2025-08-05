@@ -28,6 +28,6 @@ AUDIO_TRANSCRIBE_BATCH_SIZE = 24
 AUDIO_TRANSCRIBE_SEGMENT_LENGTH_SEC = 2.5
 
 GROUND_TRUTH_FOLDER = '/Users/simhyeongju/AVAPT/data/pianovam/midi/'
-PREDICTED_FOLDER = "/Users/simhyeongju/AVAPT/EDA/_transcribed_MIDI/OnsetsAndFrames_2_2.5sec"
+PREDICTED_FOLDER = "/Users/simhyeongju/AVAPT/EDA/_transcribed_MIDI/OnsetsAndFrames_2_5sec"
 
 SF2_PATH = '/Users/simhyeongju/AVAPT/EDA/FluidR3_GM.sf2'
