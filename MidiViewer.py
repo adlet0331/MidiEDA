@@ -12,7 +12,9 @@ from MidiFeatures import MidiFeatures
 # [IMPORTANT] Please modify the paths below to match your environment.
 PREDICTED_MIDI_PATH = "/Users/simhyeongju/AVAPT/EDA/_transcribed_MIDI/OnsetsAndFrames_2_5sec/"
 GROUNDTRUTH_MIDI_PATH = "/Users/simhyeongju/AVAPT/data/pianovam/"
+SCORE_SCALE_CONSTANT = 10
 # -------------------------
+
 
 pygame.init()
 pygame.mixer.init()
@@ -30,7 +32,8 @@ COLORS = {
     'gt_only_color': (0, 150, 255), 'pred_only_color': (255, 165, 0),
     'checkbox_border': (150, 150, 150), 'checkbox_checked': (200, 200, 200),
     'tooltip_bg': (250, 250, 220), 'tooltip_text': (10, 10, 10),
-    'popup_overlay': (0, 0, 0, 180)
+    'popup_overlay': (0, 0, 0, 180),
+    'regression_line': (255, 105, 180)
 }
 
 # --- Font Settings ---
@@ -55,6 +58,7 @@ class MidiEvaluatorApp:
         self.global_metadata = self._load_global_metadata()
         self.groundtruth_metadata = self._load_groundtruth_metadata()
         self.evaluation_metadata = self._load_evaluation_metadata()
+        self.groundtruth_features_metadata = self._load_groundtruth_features_metadata()
 
         self.FILE_COLUMNS = {
             'index': {'label': '#', 'width': 60, 'key': 'index'},
@@ -110,18 +114,39 @@ class MidiEvaluatorApp:
         self.show_feature_popup = False
         self.selected_features = set([v[0] for v in list(self.features_info.values())[:5]])
         self.feature_select_button_rect = pygame.Rect(SCREEN_WIDTH - 320, 20, 160, 40)
+        self.detail_corr_button_rect = pygame.Rect(self.feature_select_button_rect.x - 170, 20, 160, 40)
+
         popup_w, popup_h = 600, 500
         self.feature_popup_rect = pygame.Rect(SCREEN_WIDTH // 2 - popup_w // 2, SCREEN_HEIGHT // 2 - popup_h // 2, popup_w, popup_h)
         self.feature_popup_close_button_rect = pygame.Rect(self.feature_popup_rect.right - 120, self.feature_popup_rect.bottom - 55, 100, 40)
         self.feature_checkbox_rects = {}
         self.active_tooltip = None
 
-        # Correlation view variables
         self.correlation_data = {}
         self.selected_correlation_feature = None
         self.selected_score_metric = 'f1'
         self.correlation_feature_buttons = {}
         self.correlation_metric_buttons = {}
+        
+        self.correlation_normalize = False
+        self.show_regression_line = False
+        self.correlation_plot_type = 'scatter'
+        self.correlation_controls = {}
+        
+        # --- DropDown Menu for Plot Types ---
+        self.plot_type_dropdown_open = False
+        self.plot_types = {
+            'scatter': 'Scatter (1)',
+            'hist_feature': 'Feat Hist (2)',
+            'hist_score': 'Score Hist (3)'
+        }
+        self.dropdown_rects = {} # Stores rects for the dropdown and its options
+
+        self.global_correlation_data = {}
+        self.selected_global_correlation_feature = None
+        self.selected_global_score_metric = 'f1'
+        self.global_correlation_feature_buttons = {}
+        self.global_correlation_metric_buttons = {}
 
     def _load_global_metadata(self):
         path = os.path.join(PREDICTED_MIDI_PATH, 'metadata.json')
@@ -134,6 +159,18 @@ class MidiEvaluatorApp:
         try:
             with open(path, 'r', encoding='utf-8') as f: return json.load(f)
         except FileNotFoundError: print(f"Warning: Evaluation metadata.json not found at '{path}'"); return None
+
+    def _load_groundtruth_features_metadata(self):
+        path = os.path.join(GROUNDTRUTH_MIDI_PATH, 'midi', 'features_metadata.json')
+        print(f"Loading ground truth features from '{path}'...")
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                print("✅ Ground truth features loaded successfully.")
+                return data
+        except FileNotFoundError:
+            print(f"⚠️ Warning: Ground truth features_metadata.json not found at '{path}'")
+            return {}
 
     def _load_file_evaluation_metadata(self, filename):
         path = os.path.join(os.path.join(PREDICTED_MIDI_PATH, filename), 'evaluation.json')
@@ -195,14 +232,16 @@ class MidiEvaluatorApp:
                 if self.state == 'FILE_SELECT': self.handle_file_select_clicks(pos)
                 elif self.state == 'DETAIL_VIEW': self.handle_detail_view_clicks(pos)
                 elif self.state == 'PIANO_ROLL_VIEW': self.handle_piano_roll_clicks(pos)
-                elif self.state == 'CORRELATION_VIEW': self.handle_correlation_view_clicks(pos)
+                elif self.state in ['CORRELATION_VIEW', 'GLOBAL_CORRELATION_VIEW']:
+                    self.handle_correlation_view_clicks(pos)
             if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if self.state == 'PIANO_ROLL_VIEW' and self.is_scrubbing: self.is_scrubbing = False; self._set_playback_state(True)
             if event.type == pygame.MOUSEMOTION:
+                mouse_pos = pygame.mouse.get_pos()
+                self.active_tooltip = None
                 if self.state == 'PIANO_ROLL_VIEW':
-                    if self.is_scrubbing: self.handle_piano_roll_scrub(event.pos)
-                    self.check_feature_hover(event.pos)
-                else: self.active_tooltip = None
+                    if self.is_scrubbing: self.handle_piano_roll_scrub(mouse_pos)
+                    self.check_feature_hover(mouse_pos)
             if event.type == pygame.KEYDOWN:
                 if self.state == 'PIANO_ROLL_VIEW':
                     if event.key == pygame.K_w: self.piano_roll_view_options['show_gt'] = not self.piano_roll_view_options['show_gt']
@@ -210,12 +249,62 @@ class MidiEvaluatorApp:
                     elif event.key == pygame.K_SPACE: self._set_playback_state(not self.is_playing)
                     elif event.key == pygame.K_LEFT or event.key == pygame.K_a: self.change_segment(-1)
                     elif event.key == pygame.K_RIGHT or event.key == pygame.K_d: self.change_segment(1)
+                
+                elif self.state in ['CORRELATION_VIEW', 'GLOBAL_CORRELATION_VIEW']:
+                    is_global = self.state == 'GLOBAL_CORRELATION_VIEW'
+                    
+                    if event.key in [pygame.K_w, pygame.K_s]:
+                        correlation_data = self.global_correlation_data if is_global else self.correlation_data
+                        selected_feature = self.selected_global_correlation_feature if is_global else self.selected_correlation_feature
+                        if correlation_data and selected_feature:
+                            sorted_features = sorted(correlation_data.items(), key=lambda item: item[1]['label'])
+                            feature_keys = [item[0] for item in sorted_features]
+                            if feature_keys:
+                                try:
+                                    current_index = feature_keys.index(selected_feature)
+                                    direction = -1 if event.key == pygame.K_w else 1
+                                    new_index = (current_index + direction) % len(feature_keys)
+                                    new_selection = feature_keys[new_index]
+                                    if is_global: self.selected_global_correlation_feature = new_selection
+                                    else: self.selected_correlation_feature = new_selection
+                                except ValueError:
+                                    if is_global: self.selected_global_correlation_feature = feature_keys[0]
+                                    else: self.selected_correlation_feature = feature_keys[0]
+                    
+                    if event.key in [pygame.K_a, pygame.K_d]:
+                        selected_metric = self.selected_global_score_metric if is_global else self.selected_score_metric
+                        metrics = ['f1', 'p', 'r']
+                        try:
+                            current_index = metrics.index(selected_metric)
+                            direction = -1 if event.key == pygame.K_a else 1
+                            new_index = (current_index + direction) % len(metrics)
+                            new_selection = metrics[new_index]
+                            if is_global: self.selected_global_score_metric = new_selection
+                            else: self.selected_score_metric = new_selection
+                        except ValueError:
+                            if is_global: self.selected_global_score_metric = metrics[0]
+                            else: self.selected_score_metric = metrics[0]
+
+                    if event.key == pygame.K_n:
+                        self.correlation_normalize = not self.correlation_normalize
+                    elif event.key == pygame.K_r:
+                         self.show_regression_line = not self.show_regression_line
+                    elif event.key == pygame.K_1:
+                        self.correlation_plot_type = 'scatter'
+                    elif event.key == pygame.K_2:
+                        self.correlation_plot_type = 'hist_feature'
+                    elif event.key == pygame.K_3:
+                        self.correlation_plot_type = 'hist_score'
+
                 if event.key == pygame.K_ESCAPE: self._go_back()
 
     def _go_back(self):
-        if self.show_feature_popup: self.show_feature_popup = False
+        if self.plot_type_dropdown_open: self.plot_type_dropdown_open = False
+        elif self.show_feature_popup: self.show_feature_popup = False
+        elif self.state == 'GLOBAL_CORRELATION_VIEW':
+            self.state = 'FILE_SELECT'; self.global_correlation_data = {}
         elif self.state == 'CORRELATION_VIEW':
-            self.state = 'PIANO_ROLL_VIEW'; self.correlation_data = {}
+            self.state = 'DETAIL_VIEW'; self.correlation_data = {}
         elif self.state == 'DETAIL_VIEW': self.state = 'FILE_SELECT'; self.detail_data = {}; self.segment_scroll_y = 0
         elif self.state == 'PIANO_ROLL_VIEW': self.state = 'DETAIL_VIEW'; self._set_playback_state(False); self.piano_roll_data = {}
 
@@ -252,6 +341,12 @@ class MidiEvaluatorApp:
         return False
 
     def handle_file_select_clicks(self, pos):
+        GLOBAL_CORR_BUTTON_RECT = pygame.Rect(SCREEN_WIDTH - 270, 10, 250, 40)
+        if GLOBAL_CORR_BUTTON_RECT.collidepoint(pos):
+            self.calculate_global_correlations()
+            self.state = 'GLOBAL_CORRELATION_VIEW'
+            return
+
         if self.handle_table_header_click(pos, 50, self.FILE_COLUMNS, self.audio_folders_data, self.file_list_sort_config): return
         list_rect = pygame.Rect(50, 90, SCREEN_WIDTH - 100, SCREEN_HEIGHT - 100)
         if list_rect.collidepoint(pos):
@@ -274,6 +369,12 @@ class MidiEvaluatorApp:
         if self.show_feature_popup: self._handle_feature_popup_clicks(pos); return
         if self.feature_select_button_rect.collidepoint(pos): self.show_feature_popup = True; return
         if pygame.Rect(SCREEN_WIDTH - 150, 20, 130, 40).collidepoint(pos): self._go_back(); return
+        
+        if self.detail_corr_button_rect.collidepoint(pos):
+            self.calculate_correlations()
+            self.state = 'CORRELATION_VIEW'
+            return
+
         if self.handle_table_header_click(pos, 95, self.dynamic_segment_columns, self.detail_data.get('segment_list',[]), self.segment_list_sort_config): return
         list_rect = pygame.Rect(50, 135, SCREEN_WIDTH - 100, SCREEN_HEIGHT - 135)
         if list_rect.collidepoint(pos) and self.detail_data.get('segment_list'):
@@ -288,17 +389,12 @@ class MidiEvaluatorApp:
 
     def handle_piano_roll_clicks(self, pos):
         BACK_RECT = pygame.Rect(SCREEN_WIDTH - 130 - 10, 20, 120, 40)
-        CORRELATION_RECT = pygame.Rect(BACK_RECT.x - 150 - 10, 20, 150, 40)
-        STOP_RECT = pygame.Rect(CORRELATION_RECT.x - 120 - 10, 20, 120, 40)
+        STOP_RECT = pygame.Rect(BACK_RECT.x - 120 - 10, 20, 120, 40)
         PLAY_RECT = pygame.Rect(STOP_RECT.x - 120 - 10, 20, 120, 40)
         NEXT_RECT = pygame.Rect(PLAY_RECT.x - 120 - 10, 20, 120, 40)
         PREV_RECT = pygame.Rect(NEXT_RECT.x - 120 - 10, 20, 120, 40)
 
         if BACK_RECT.collidepoint(pos): self._go_back(); return
-        if CORRELATION_RECT.collidepoint(pos):
-            self.calculate_correlations()
-            self.state = 'CORRELATION_VIEW'
-            return
         if PREV_RECT.collidepoint(pos): self.change_segment(-1); return
         if NEXT_RECT.collidepoint(pos): self.change_segment(1); return
         if PLAY_RECT.collidepoint(pos): self.handle_piano_roll_space_key()
@@ -310,15 +406,49 @@ class MidiEvaluatorApp:
         if roll_rect.collidepoint(pos): self.is_scrubbing = True; self._set_playback_state(False); self.handle_piano_roll_scrub(pos)
 
     def handle_correlation_view_clicks(self, pos):
+        is_global = self.state == 'GLOBAL_CORRELATION_VIEW'
+
+        # --- DropDown Menu Click Handling (must be checked first) ---
+        main_dropdown_rect = self.dropdown_rects.get('main')
+        if main_dropdown_rect and main_dropdown_rect.collidepoint(pos):
+            self.plot_type_dropdown_open = not self.plot_type_dropdown_open
+            return
+
+        if self.plot_type_dropdown_open:
+            for p_type, rect in self.dropdown_rects.get('options', {}).items():
+                if rect.collidepoint(pos):
+                    self.correlation_plot_type = p_type
+                    self.plot_type_dropdown_open = False
+                    return
+            # If the dropdown is open and the click is outside, close it and check other buttons
+            self.plot_type_dropdown_open = False
+        # -------------------------------------------------------------
+
         back_button_rect = pygame.Rect(SCREEN_WIDTH - 150, 20, 130, 40)
         if back_button_rect.collidepoint(pos):
             self._go_back(); return
-        for metric, rect in self.correlation_metric_buttons.items():
+        
+        metric_buttons = self.global_correlation_metric_buttons if is_global else self.correlation_metric_buttons
+        for metric, rect in metric_buttons.items():
             if rect.collidepoint(pos):
-                self.selected_score_metric = metric; return
-        for feature_key, rect in self.correlation_feature_buttons.items():
+                if is_global: self.selected_global_score_metric = metric
+                else: self.selected_score_metric = metric
+                return
+
+        feature_buttons = self.global_correlation_feature_buttons if is_global else self.correlation_feature_buttons
+        for feature_key, rect in feature_buttons.items():
             if rect.collidepoint(pos):
-                self.selected_correlation_feature = feature_key; return
+                if is_global: self.selected_global_correlation_feature = feature_key
+                else: self.selected_correlation_feature = feature_key
+                return
+
+        for control_key, rect in self.correlation_controls.items():
+            if rect.collidepoint(pos):
+                if control_key == 'normalize':
+                    self.correlation_normalize = not self.correlation_normalize
+                elif control_key == 'regression':
+                    self.show_regression_line = not self.show_regression_line
+                return
 
     def handle_piano_roll_scrub(self, pos):
         roll_rect = pygame.Rect(250, 100, SCREEN_WIDTH - 300, SCREEN_HEIGHT - 250)
@@ -381,11 +511,23 @@ class MidiEvaluatorApp:
         except Exception as e: print(f"Error loading detail data: {e}"); self.detail_data = {}
 
     def calculate_correlations(self):
-        print("Calculating feature-score correlations...")
+        print("Calculating feature-score correlations for segments...")
         self.correlation_data = {}
         segment_list = self.detail_data.get('segment_list', [])
         if not segment_list:
             print("No segment data available for correlation."); return
+
+        all_p = [s['p'] for s in segment_list if s.get('p') is not None]
+        all_r = [s['r'] for s in segment_list if s.get('r') is not None]
+        all_f1 = [s['f1'] for s in segment_list if s.get('f1') is not None]
+
+        min_p = min(all_p) if all_p else 1.0
+        min_r = min(all_r) if all_r else 1.0
+        min_f1 = min(all_f1) if all_f1 else 1.0
+
+        denom_p = 1 - min_p
+        denom_r = 1 - min_r
+        denom_f1 = 1 - min_f1
 
         for feature_label, (feature_key, _, _) in self.features_info.items():
             data_points = []
@@ -393,25 +535,103 @@ class MidiEvaluatorApp:
                 feature_value = segment.get('features', {}).get(feature_key)
                 p, r, f1 = segment.get('p'), segment.get('r'), segment.get('f1')
                 if feature_value is not None and all(s is not None for s in [p, r, f1]):
-                    data_points.append({'feature': feature_value, 'p': p, 'r': r, 'f1': f1})
+                    tp = ((1 - p) / denom_p * SCORE_SCALE_CONSTANT) if denom_p > 0 else 0
+                    tr = ((1 - r) / denom_r * SCORE_SCALE_CONSTANT) if denom_r > 0 else 0
+                    tf1 = ((1 - f1) / denom_f1 * SCORE_SCALE_CONSTANT) if denom_f1 > 0 else 0
+                    data_points.append({
+                        'feature': feature_value,
+                        'p': tp, 'r': tr, 'f1': tf1,
+                        'original_p': p, 'original_r': r, 'original_f1': f1,
+                        'segment': segment['num']
+                    })
 
             if len(data_points) < 2: continue
 
             correlations = {}
+            feature_values = np.array([d['feature'] for d in data_points])
+            original_scores = {m: np.array([d[f'original_{m}'] for d in data_points]) for m in ['p', 'r', 'f1']}
+            
             for metric in ['p', 'r', 'f1']:
-                feature_values = np.array([d['feature'] for d in data_points])
-                score_values = np.array([d[metric] for d in data_points])
+                score_values = original_scores[metric]
                 if np.std(feature_values) == 0 or np.std(score_values) == 0:
                     corr_coeff = 0.0
                 else:
-                    corr_matrix = np.corrcoef(feature_values, score_values); corr_coeff = corr_matrix[0, 1]
+                    corr_matrix = np.corrcoef(feature_values, score_values)
+                    corr_coeff = corr_matrix[0, 1]
                 correlations[metric] = corr_coeff if not np.isnan(corr_coeff) else 0.0
 
             self.correlation_data[feature_key] = {'label': feature_label, 'correlations': correlations, 'points': data_points}
         
         if not self.selected_correlation_feature and self.correlation_data:
-            self.selected_correlation_feature = next(iter(self.correlation_data))
-        print("Correlation calculation complete.")
+            self.selected_correlation_feature = next(iter(self.correlation_data.keys()))
+        print("Segment correlation calculation complete.")
+
+    def calculate_global_correlations(self):
+        print("Calculating global feature-score correlations...")
+        self.global_correlation_data = {}
+        file_list = self.audio_folders_data
+        features_db = self.groundtruth_features_metadata
+        if not file_list or not features_db:
+            print("No file or feature data available for global correlation.")
+            return
+
+        all_p = [f['p'] for f in file_list if f.get('p') is not None]
+        all_r = [f['r'] for f in file_list if f.get('r') is not None]
+        all_f1 = [f['f1'] for f in file_list if f.get('f1') is not None]
+
+        min_p = min(all_p) if all_p else 1.0
+        min_r = min(all_r) if all_r else 1.0
+        min_f1 = min(all_f1) if all_f1 else 1.0
+
+        denom_p = 1 - min_p
+        denom_r = 1 - min_r
+        denom_f1 = 1 - min_f1
+
+        for feature_label, (feature_key, _, _) in self.features_info.items():
+            data_points = []
+            for file_info in file_list:
+                record_time = file_info['name'].replace('_16020Hz', '')
+                feature_file_key = f"{record_time}.mid"
+                feature_data = features_db.get(feature_file_key, {})
+                if not feature_data.get('available'): continue
+                feature_value = feature_data.get('numeric_features', {}).get(feature_key)
+                p, r, f1 = file_info.get('p'), file_info.get('r'), file_info.get('f1')
+
+                if feature_value is not None and all(s is not None for s in [p, r, f1]):
+                    tp = ((1 - p) / denom_p * SCORE_SCALE_CONSTANT) if denom_p > 0 else 0
+                    tr = ((1 - r) / denom_r * SCORE_SCALE_CONSTANT) if denom_r > 0 else 0
+                    tf1 = ((1 - f1) / denom_f1 * SCORE_SCALE_CONSTANT) if denom_f1 > 0 else 0
+                    data_points.append({
+                        'feature': feature_value, 
+                        'p': tp, 'r': tr, 'f1': tf1,
+                        'original_p': p, 'original_r': r, 'original_f1': f1,
+                        'piece': file_info.get('piece', 'N/A')
+                    })
+
+            if len(data_points) < 2: continue
+            
+            correlations = {}
+            feature_values = np.array([d['feature'] for d in data_points])
+            original_scores = {m: np.array([d[f'original_{m}'] for d in data_points]) for m in ['p', 'r', 'f1']}
+
+            for metric in ['p', 'r', 'f1']:
+                score_values = original_scores[metric]
+                if np.std(feature_values) == 0 or np.std(score_values) == 0:
+                    corr_coeff = 0.0
+                else:
+                    corr_matrix = np.corrcoef(feature_values, score_values)
+                    corr_coeff = corr_matrix[0, 1]
+                correlations[metric] = corr_coeff if not np.isnan(corr_coeff) else 0.0
+
+            self.global_correlation_data[feature_key] = {
+                'label': feature_label,
+                'correlations': correlations,
+                'points': data_points
+            }
+        
+        if not self.selected_global_correlation_feature and self.global_correlation_data:
+            self.selected_global_correlation_feature = next(iter(self.global_correlation_data.keys()))
+        print("Global correlation calculation complete.")
 
     def load_piano_roll_data(self):
         if not self.global_metadata: print("Warning: Global metadata not loaded."); self.piano_roll_data = {}; return
@@ -456,9 +676,12 @@ class MidiEvaluatorApp:
             frame_len_sec = 0.01; frame_times = np.arange(0, cut_length, frame_len_sec); total_tp, total_fp, total_tn = 0, 0, 0
             for time in frame_times:
                 true_pitches = {note.pitch for note in gt_notes_in_segment if note.start <= time < note.end}; pred_pitches = {note.pitch for note in pred_notes if note.start <= time < note.end}
-                total_tp += len(true_pitches.intersection(pred_pitches)); total_fp += len(pred_pitches.difference(true_pitches)); total_tn += len(true_pitches.difference(pred_pitches))
-            p = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0; r = total_tp / (total_tp + total_tn) if (total_tp + total_tn) > 0 else 0.0
-            f1 = 2 * p * r / (p + r) if (p + r) > 0 else 0.0; frame_scores = {'p': p, 'r': r, 'f1': f1}; frame_counts = {'TP': total_tp, 'FP': total_fp, 'TN': total_tn}
+                total_tp += len(true_pitches.intersection(pred_pitches)); total_fp += len(pred_pitches.difference(true_pitches))
+                total_tn += len(true_pitches.difference(pred_pitches))
+            p = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+            r = total_tp / (total_tp + total_tn) if (total_tp + total_tn) > 0 else 0.0
+            f1 = 2 * p * r / (p + r) if (p + r) > 0 else 0.0; frame_scores = {'p': p, 'r': r, 'f1': f1}
+            frame_counts = {'TP': total_tp, 'FP': total_fp, 'TN': total_tn}
             audio_path = os.path.join(GROUNDTRUTH_MIDI_PATH, 'audio', f"{selected_filename}.wav")
             if os.path.exists(audio_path): full_audio = AudioSegment.from_wav(audio_path); audio_slice = full_audio[start_time * 1000 : end_time * 1000]
             else: print(f"Warning: Audio file not found at '{audio_path}'")
@@ -471,14 +694,22 @@ class MidiEvaluatorApp:
         if self.state == 'FILE_SELECT': self.draw_file_select_screen()
         elif self.state == 'DETAIL_VIEW': self.draw_detail_view_screen()
         elif self.state == 'PIANO_ROLL_VIEW': self.draw_piano_roll_screen()
-        elif self.state == 'CORRELATION_VIEW': self.draw_correlation_screen()
+        elif self.state == 'CORRELATION_VIEW':
+            self._draw_unified_correlation_view(is_global=False)
+        elif self.state == 'GLOBAL_CORRELATION_VIEW':
+            self._draw_unified_correlation_view(is_global=True)
+
+        # Dropdown menu must be drawn last to appear on top of other elements
+        if self.state in ['CORRELATION_VIEW', 'GLOBAL_CORRELATION_VIEW']:
+            self._draw_plot_type_dropdown()
+
         self._draw_tooltip(); pygame.display.flip()
 
     def _update_dynamic_segment_columns(self):
         self.dynamic_segment_columns = self.SEGMENT_COLUMNS_BASE.copy()
         ordered_features = sorted(list(self.features_info.items()), key=lambda item: item[0])
         for label, (key, _, _) in ordered_features:
-            if key in self.selected_features: self.dynamic_segment_columns[key] = {'label': label, 'width': 130, 'key': key}
+            if key in self.selected_features: self.dynamic_segment_columns[key] = {'label': label, 'width': 150, 'key': key}
         total_width = sum(c['width'] for c in self.dynamic_segment_columns.values())
         if total_width > SCREEN_WIDTH - 100: print(f"Warning: Total column width ({total_width}) exceeds screen space.")
 
@@ -494,6 +725,15 @@ class MidiEvaluatorApp:
 
     def draw_file_select_screen(self):
         screen.blit(FONT_MAIN.render("Select an Audio File", True, COLORS['text']), (50, 10))
+        
+        mouse_pos = pygame.mouse.get_pos()
+        GLOBAL_CORR_BUTTON_RECT = pygame.Rect(SCREEN_WIDTH - 270, 10, 250, 35)
+        btn_color = COLORS['button_hover'] if GLOBAL_CORR_BUTTON_RECT.collidepoint(mouse_pos) else COLORS['button']
+        pygame.draw.rect(screen, btn_color, GLOBAL_CORR_BUTTON_RECT, border_radius=5)
+        btn_text = FONT_SMALL.render("Global Correlation Analysis", True, COLORS['text'])
+        btn_text_rect = btn_text.get_rect(center=GLOBAL_CORR_BUTTON_RECT.center)
+        screen.blit(btn_text, btn_text_rect)
+
         self._draw_table_header(50, self.FILE_COLUMNS, self.file_list_sort_config)
         list_rect = pygame.Rect(50, 90, SCREEN_WIDTH - 100, SCREEN_HEIGHT - 100)
         for i, folder_data in enumerate(self.audio_folders_data):
@@ -511,13 +751,17 @@ class MidiEvaluatorApp:
 
     def draw_detail_view_screen(self):
         back_button_rect = pygame.Rect(SCREEN_WIDTH - 150, 20, 130, 40)
-        fs_button_rect = self.feature_select_button_rect; mouse_pos = pygame.mouse.get_pos()
-        if back_button_rect.collidepoint(mouse_pos): pygame.draw.rect(screen, COLORS['button_hover'], back_button_rect, border_radius=5)
-        else: pygame.draw.rect(screen, COLORS['button'], back_button_rect, border_radius=5)
-        if fs_button_rect.collidepoint(mouse_pos): pygame.draw.rect(screen, COLORS['button_hover'], fs_button_rect, border_radius=5)
-        else: pygame.draw.rect(screen, COLORS['button'], fs_button_rect, border_radius=5)
-        screen.blit(FONT_SMALL.render("<< Back", True, COLORS['text']), (back_button_rect.x + 30, back_button_rect.y + 10))
-        screen.blit(FONT_SMALL.render("Select Columns", True, COLORS['text']), (fs_button_rect.x + 15, fs_button_rect.y + 10))
+        fs_button_rect = self.feature_select_button_rect
+        corr_button_rect = self.detail_corr_button_rect
+        mouse_pos = pygame.mouse.get_pos()
+        
+        for rect, text in [(back_button_rect, "<< Back"), (fs_button_rect, "Select Columns"), (corr_button_rect, "Correlations")]:
+            color = COLORS['button_hover'] if rect.collidepoint(mouse_pos) else COLORS['button']
+            pygame.draw.rect(screen, color, rect, border_radius=5)
+            text_surf = FONT_SMALL.render(text, True, COLORS['text'])
+            text_rect = text_surf.get_rect(center=rect.center)
+            screen.blit(text_surf, text_rect)
+        
         info = self.selected_file_info
         screen.blit(FONT_MAIN.render(f"Piece: {info.get('piece', 'N/A')}", True, COLORS['text']), (50, 10))
         screen.blit(FONT_SMALL.render(f"Player: {info.get('player', 'N/A')} ({info.get('skill', 'N/A')})   |   Split: {info.get('split', 'N/A')}", True, COLORS['text']), (50, 45))
@@ -535,8 +779,13 @@ class MidiEvaluatorApp:
                         key = col_info['key']; val_str = "";
                         if key in base_data: val_str = base_data.get(key, '')
                         else:
-                            feature_label = col_info['label']; _, fmt, _ = self.features_info.get(feature_label, ('', '{}', ''))
                             feature_val = seg_data.get('features', {}).get(key)
+                            fmt = '{}'
+                            for f_label, f_info_tuple in self.features_info.items():
+                                if f_info_tuple[0] == key:
+                                    fmt = f_info_tuple[1]
+                                    break
+                            
                             if feature_val is not None:
                                 try: val_str = fmt.format(feature_val)
                                 except (ValueError, TypeError): val_str = str(round(feature_val, 2)) if isinstance(feature_val, float) else str(feature_val)
@@ -564,12 +813,20 @@ class MidiEvaluatorApp:
 
     def check_feature_hover(self, pos):
         table_rect = pygame.Rect(250, SCREEN_HEIGHT - 150 + 20, SCREEN_WIDTH - 300, 90)
-        num_cols = len(self.features_info); col_width = table_rect.width / num_cols; x_offset = table_rect.x
+        num_cols = len(self.features_info); 
+        if num_cols == 0: return
+        col_width = table_rect.width / num_cols; x_offset = table_rect.x
+        is_hovering_feature = False
         for label, (key, fmt, desc) in self.features_info.items():
             cell_rect = pygame.Rect(x_offset, table_rect.y, col_width, table_rect.height)
-            if cell_rect.collidepoint(pos): self.active_tooltip = {'text': desc, 'pos': pos}; return
+            if cell_rect.collidepoint(pos):
+                self.active_tooltip = {'text': desc, 'pos': pos}
+                is_hovering_feature = True
+                break
             x_offset += col_width
-        self.active_tooltip = None
+        if not is_hovering_feature:
+            if self.active_tooltip and self.active_tooltip.get('text') in [d[2] for d in self.features_info.values()]:
+                self.active_tooltip = None
 
     def _draw_tooltip(self):
         if not self.active_tooltip: return
@@ -604,7 +861,9 @@ class MidiEvaluatorApp:
         if not gt_f: return
         pygame.draw.rect(screen, COLORS['header'], rect, border_radius=5); pygame.draw.rect(screen, COLORS['grid_line'], rect, 1, border_radius=5)
         screen.blit(FONT_SMALL.render("Ground Truth MIDI Features", True, COLORS['text']), (rect.x + 10, rect.y + 5))
-        num_cols = len(self.features_info); col_width = rect.width / num_cols; table_y = rect.y + 35; cell_height = rect.height - 38; x_offset = rect.x
+        num_cols = len(self.features_info)
+        if num_cols == 0: return
+        col_width = rect.width / num_cols; table_y = rect.y + 35; cell_height = rect.height - 38; x_offset = rect.x
         for label, (key, fmt, desc) in self.features_info.items():
             cell_rect = pygame.Rect(x_offset, table_y, col_width, cell_height)
             label_surf = FONT_TINY.render(label, True, COLORS['gt_only_color']); label_rect = label_surf.get_rect(centerx=cell_rect.centerx, top=cell_rect.top + 8); screen.blit(label_surf, label_rect)
@@ -627,15 +886,15 @@ class MidiEvaluatorApp:
     def draw_piano_roll_screen(self):
         mouse_pos = pygame.mouse.get_pos()
         BACK_RECT = pygame.Rect(SCREEN_WIDTH - 130 - 10, 20, 120, 40)
-        CORRELATION_RECT = pygame.Rect(BACK_RECT.x - 150 - 10, 20, 150, 40)
-        STOP_RECT = pygame.Rect(CORRELATION_RECT.x - 120 - 10, 20, 120, 40)
+        STOP_RECT = pygame.Rect(BACK_RECT.x - 120 - 10, 20, 120, 40)
         PLAY_RECT = pygame.Rect(STOP_RECT.x - 120 - 10, 20, 120, 40)
         NEXT_RECT = pygame.Rect(PLAY_RECT.x - 120 - 10, 20, 120, 40)
         PREV_RECT = pygame.Rect(NEXT_RECT.x - 120 - 10, 20, 120, 40)
         def draw_button(rect, text):
             color = COLORS['button_hover'] if rect.collidepoint(mouse_pos) else COLORS['button']; pygame.draw.rect(screen, color, rect, border_radius=5)
             text_surf = FONT_SMALL.render(text, True, COLORS['text']); text_rect = text_surf.get_rect(center=rect.center); screen.blit(text_surf, text_rect)
-        draw_button(PREV_RECT, "<< Prev"); draw_button(NEXT_RECT, "Next >>"); draw_button(PLAY_RECT, "Pause" if self.is_playing else "Play"); draw_button(STOP_RECT, "Stop"); draw_button(CORRELATION_RECT, "Correlations"); draw_button(BACK_RECT, "<< Back")
+        
+        draw_button(PREV_RECT, "<< Prev"); draw_button(NEXT_RECT, "Next >>"); draw_button(PLAY_RECT, "Pause" if self.is_playing else "Play"); draw_button(STOP_RECT, "Stop"); draw_button(BACK_RECT, "<< Back")
         info = self.selected_file_info; screen.blit(FONT_MAIN.render(f"Piece: {info.get('piece', 'N/A')} - Segment {self.selected_segment}", True, COLORS['text']), (50, 15))
         self._draw_piano_roll_stats(); roll_rect = pygame.Rect(250, 100, SCREEN_WIDTH - 300, SCREEN_HEIGHT - 250); pygame.draw.rect(screen, COLORS['piano_roll_bg'], roll_rect)
         if not self.piano_roll_data: return
@@ -665,68 +924,228 @@ class MidiEvaluatorApp:
             if roll_rect.left <= line_x <= roll_rect.right: pygame.draw.line(screen, COLORS['playback_line'], (line_x, roll_rect.top), (line_x, roll_rect.bottom), 2)
         self._draw_legend_and_controls(30, 150); features_rect = pygame.Rect(250, roll_rect.bottom + 20, roll_rect.width, 90); self._draw_midi_features_table(features_rect)
 
-    def draw_correlation_screen(self):
+    def _draw_plot_type_dropdown(self):
+        mouse_pos = pygame.mouse.get_pos()
+        main_rect = self.dropdown_rects.get('main')
+        if not main_rect:
+            return
+
+        # Draw the main box
+        color = COLORS['button_hover'] if main_rect.collidepoint(mouse_pos) or self.plot_type_dropdown_open else COLORS['button']
+        pygame.draw.rect(screen, color, main_rect, border_radius=5)
+
+        # Draw the currently selected text and an arrow
+        selected_text = self.plot_types.get(self.correlation_plot_type, "Select Mode")
+        text_surf = FONT_SMALL.render(selected_text, True, COLORS['text'])
+        screen.blit(text_surf, (main_rect.x + 10, main_rect.centery - text_surf.get_height() / 2))
+        arrow = "▲" if self.plot_type_dropdown_open else "▼"
+        arrow_surf = FONT_SMALL.render(arrow, True, COLORS['text'])
+        arrow_rect = arrow_surf.get_rect(centery=main_rect.centery, right=main_rect.right - 10)
+        screen.blit(arrow_surf, arrow_rect)
+
+        # If open, draw the options
+        if self.plot_type_dropdown_open:
+            self.dropdown_rects['options'] = {}
+            option_y = main_rect.bottom
+            for p_type, p_label in self.plot_types.items():
+                option_rect = pygame.Rect(main_rect.x, option_y, main_rect.width, main_rect.height)
+                self.dropdown_rects['options'][p_type] = option_rect
+                
+                opt_color = COLORS['button_hover'] if option_rect.collidepoint(mouse_pos) else COLORS['button']
+                pygame.draw.rect(screen, opt_color, option_rect, border_top_left_radius=0, border_top_right_radius=0, border_bottom_left_radius=5, border_bottom_right_radius=5)
+                
+                opt_text_surf = FONT_SMALL.render(p_label, True, COLORS['text'])
+                screen.blit(opt_text_surf, (option_rect.x + 10, option_rect.centery - opt_text_surf.get_height() / 2))
+                option_y += main_rect.height
+
+    def _draw_unified_correlation_view(self, is_global):
+        if is_global:
+            view_title, view_subtitle = "Global MIDI Feature Correlation", f"Dataset: All {len(self.audio_folders_data)} Files"
+            correlation_data, selected_feature, selected_metric = self.global_correlation_data, self.selected_global_correlation_feature, self.selected_global_score_metric
+            feature_button_rects, metric_button_rects = self.global_correlation_feature_buttons, self.global_correlation_metric_buttons
+        else:
+            view_title, view_subtitle = "Segment Feature Correlation", f"Piece: {self.selected_file_info.get('piece', 'N/A')}"
+            correlation_data, selected_feature, selected_metric = self.correlation_data, self.selected_correlation_feature, self.selected_score_metric
+            feature_button_rects, metric_button_rects = self.correlation_feature_buttons, self.correlation_metric_buttons
+
         LEFT_PANEL_WIDTH, PADDING = 300, 20
-        PLOT_AREA_RECT = pygame.Rect(LEFT_PANEL_WIDTH + PADDING, 100, SCREEN_WIDTH - LEFT_PANEL_WIDTH - PADDING * 2, SCREEN_HEIGHT - 200)
-        screen.blit(FONT_MAIN.render("Feature Correlation Analysis", True, COLORS['text']), (50, 15))
-        screen.blit(FONT_SMALL.render(f"Piece: {self.selected_file_info.get('piece', 'N/A')}", True, COLORS['text']), (50, 55))
-        back_button_rect = pygame.Rect(SCREEN_WIDTH - 150, 20, 130, 40); mouse_pos = pygame.mouse.get_pos()
+        PLOT_AREA_RECT = pygame.Rect(LEFT_PANEL_WIDTH + PADDING, 120, SCREEN_WIDTH - LEFT_PANEL_WIDTH - PADDING * 2, SCREEN_HEIGHT - 220)
+        mouse_pos = pygame.mouse.get_pos()
+        self.active_tooltip = None
+
+        screen.blit(FONT_MAIN.render(view_title, True, COLORS['text']), (50, 15))
+        screen.blit(FONT_SMALL.render(view_subtitle, True, COLORS['text']), (50, 55))
+        back_button_rect = pygame.Rect(SCREEN_WIDTH - 150, 20, 130, 40)
         pygame.draw.rect(screen, COLORS['button_hover'] if back_button_rect.collidepoint(mouse_pos) else COLORS['button'], back_button_rect, border_radius=5)
         screen.blit(FONT_SMALL.render("<< Back", True, COLORS['text']), (back_button_rect.x + 30, back_button_rect.y + 10))
+        
+        # Define DropDown rects for click detection and drawing
+        self.dropdown_rects.clear()
+        dropdown_w, dropdown_h = 240, 40
+        dropdown_x = back_button_rect.left - dropdown_w - 10
+        self.dropdown_rects['main'] = pygame.Rect(dropdown_x, back_button_rect.y, dropdown_w, dropdown_h)
 
-        self.correlation_feature_buttons.clear(); pygame.draw.rect(screen, COLORS['header'], (PADDING, 100, LEFT_PANEL_WIDTH - PADDING, SCREEN_HEIGHT - 200), border_radius=5)
+        self.correlation_controls.clear()
+        feature_button_rects.clear(); pygame.draw.rect(screen, COLORS['header'], (PADDING, 100, LEFT_PANEL_WIDTH - PADDING, SCREEN_HEIGHT - 200), border_radius=5)
         list_y = 110
-        for feature_key, data in self.correlation_data.items():
-            is_selected = self.selected_correlation_feature == feature_key
-            btn_rect = pygame.Rect(PADDING + 5, list_y, LEFT_PANEL_WIDTH - PADDING * 2, 35); self.correlation_feature_buttons[feature_key] = btn_rect
+        sorted_features = sorted(correlation_data.items(), key=lambda item: item[1]['label'])
+        for feature_key, data in sorted_features:
+            is_selected = selected_feature == feature_key
+            btn_rect = pygame.Rect(PADDING + 5, list_y, LEFT_PANEL_WIDTH - PADDING * 2, 35); feature_button_rects[feature_key] = btn_rect
             color = COLORS['button_hover'] if is_selected else ( (70,70,70) if not is_selected and btn_rect.collidepoint(mouse_pos) else COLORS['header'] )
             pygame.draw.rect(screen, color, btn_rect, border_radius=5)
             screen.blit(FONT_TINY.render(data['label'], True, COLORS['text']), (btn_rect.x + 10, btn_rect.y + 8)); list_y += 40
 
-        if not self.selected_correlation_feature or not self.correlation_data:
+        if not selected_feature or not correlation_data.get(selected_feature):
             text_surf = FONT_MAIN.render("No data to display.", True, COLORS['text']); text_rect = text_surf.get_rect(center=PLOT_AREA_RECT.center); screen.blit(text_surf, text_rect); return
 
         pygame.draw.rect(screen, COLORS['piano_roll_bg'], PLOT_AREA_RECT); pygame.draw.rect(screen, COLORS['grid_line'], PLOT_AREA_RECT, 2)
-        self.correlation_metric_buttons.clear(); metric_btn_x, metric_btn_y = PLOT_AREA_RECT.left, PLOT_AREA_RECT.top - 45
-        for metric in ['f1', 'p', 'r']:
-            label = {"f1": "F1-Score", "p": "Precision", "r": "Recall"}[metric]; is_selected = self.selected_score_metric == metric
-            btn_rect = pygame.Rect(metric_btn_x, metric_btn_y, 120, 35); self.correlation_metric_buttons[metric] = btn_rect
-            color = COLORS['tp_green'] if is_selected else (COLORS['button_hover'] if btn_rect.collidepoint(mouse_pos) else COLORS['button'])
-            pygame.draw.rect(screen, color, btn_rect, border_radius=5)
-            text_surf = FONT_SMALL.render(label, True, COLORS['text']); text_rect = text_surf.get_rect(center=btn_rect.center); screen.blit(text_surf, text_rect); metric_btn_x += 130
         
-        feature_data = self.correlation_data[self.selected_correlation_feature]; points = feature_data['points']; corr_value = feature_data['correlations'][self.selected_score_metric]
-        score_label = {"f1": "F1-Score", "p": "Precision", "r": "Recall"}[self.selected_score_metric]
-        title_surf = FONT_SMALL.render(f"{feature_data['label']} vs. {score_label}", True, COLORS['text']); screen.blit(title_surf, (PLOT_AREA_RECT.left + 15, PLOT_AREA_RECT.top + 15))
-        corr_color = COLORS['tp_green'] if corr_value > 0.5 else (COLORS['fp_red_outline'] if corr_value < -0.5 else COLORS['text'])
-        corr_surf = FONT_SMALL.render(f"Pearson Correlation: {corr_value:.3f}", True, corr_color); corr_rect = corr_surf.get_rect(right=PLOT_AREA_RECT.right - 15, top=PLOT_AREA_RECT.top + 15); screen.blit(corr_surf, corr_rect)
+        btn_x, btn_y = PLOT_AREA_RECT.left, PLOT_AREA_RECT.top - 45
+        metric_button_rects.clear()
+        for metric in ['f1', 'p', 'r']:
+            label = {"f1": "F1", "p": "Precision", "r": "Recall"}[metric]; is_selected = selected_metric == metric
+            btn_rect = pygame.Rect(btn_x, btn_y, 120, 35); metric_button_rects[metric] = btn_rect
+            color = COLORS['button'] if not is_selected else COLORS['tp_green']
+            pygame.draw.rect(screen, color, btn_rect, border_radius=5)
+            text_surf = FONT_SMALL.render(label, True, COLORS['text']); text_rect = text_surf.get_rect(center=btn_rect.center); screen.blit(text_surf, text_rect); btn_x += 130
+        
+        checkbox_size = 20; btn_x += 20
+        for key, text in [('normalize', 'Normalize (N)'), ('regression', 'Regression (R)')]:
+            is_checked = getattr(self, {'normalize': 'correlation_normalize', 'regression': 'show_regression_line'}[key])
+            self.correlation_controls[key] = pygame.Rect(btn_x, btn_y, 180, 35)
+            cb_rect = pygame.Rect(btn_x, btn_y + (35 - checkbox_size)/2, checkbox_size, checkbox_size)
+            pygame.draw.rect(screen, COLORS['checkbox_border'], cb_rect, 2, border_radius=3)
+            if is_checked: pygame.draw.rect(screen, COLORS['checkbox_checked'], cb_rect.inflate(-6, -6), border_radius=3)
+            screen.blit(FONT_SMALL.render(text, True, COLORS['text']), (cb_rect.right + 8, cb_rect.y - 2))
+            btn_x += 180
 
+        feature_data = correlation_data[selected_feature]; points = feature_data['points']
         if not points:
             no_points_surf = FONT_SMALL.render("No data points for this feature.", True, COLORS['text']); screen.blit(no_points_surf, no_points_surf.get_rect(center=PLOT_AREA_RECT.center)); return
 
-        feature_values, score_values = [p['feature'] for p in points], [p[self.selected_score_metric] for p in points]
-        min_f, max_f = min(feature_values), max(feature_values); min_s, max_s = 0.0, 1.0
-        f_range = max_f - min_f if max_f > min_f else 1; s_range = max_s - min_s if max_s > min_s else 1
-        
-        AXIS_PADDING = 50; plot_w, plot_h = PLOT_AREA_RECT.width - AXIS_PADDING*1.5, PLOT_AREA_RECT.height - AXIS_PADDING*1.5
-        plot_origin = (PLOT_AREA_RECT.left + AXIS_PADDING, PLOT_AREA_RECT.bottom - AXIS_PADDING)
+        plot_feature_values = np.array([p['feature'] for p in points])
+        plot_score_values = np.array([p[selected_metric] for p in points])
+
+        if self.correlation_plot_type == 'scatter':
+            self._draw_scatter_plot(PLOT_AREA_RECT, plot_feature_values, plot_score_values, points, is_global, selected_metric, feature_data['label'], feature_data['correlations'][selected_metric])
+        else:
+            data_to_plot = plot_feature_values if self.correlation_plot_type == 'hist_feature' else plot_score_values
+            title = f"{feature_data['label']} Distribution" if self.correlation_plot_type == 'hist_feature' else f"Score ({selected_metric.upper()}) Distribution"
+            self._draw_histogram(PLOT_AREA_RECT, data_to_plot, title)
+            
+    def _draw_scatter_plot(self, rect, f_vals, s_vals, points, is_global, metric, feature_label, corr_value):
+        mouse_pos = pygame.mouse.get_pos()
+        score_label_map = {"f1": "F1-Score", "p": "Precision", "r": "Recall"}
+
+        plot_f_vals = f_vals.copy()
+        plot_s_vals = s_vals.copy()
+
+        if self.correlation_normalize:
+            f_min, f_max = np.min(plot_f_vals), np.max(plot_f_vals)
+            s_min, s_max = np.min(plot_s_vals), np.max(plot_s_vals)
+            if f_max > f_min: plot_f_vals = (plot_f_vals - f_min) / (f_max - f_min)
+            if s_max > s_min: plot_s_vals = (plot_s_vals - s_min) / (s_max - s_min)
+
+        if self.correlation_normalize:
+            min_f, max_f, min_s, max_s = 0.0, 1.0, 0.0, 1.0
+            f_range, s_range = 1.0, 1.0
+        else:
+            min_f, max_f = np.min(plot_f_vals), np.max(plot_f_vals)
+            min_s, max_s = np.min(plot_s_vals), np.max(plot_s_vals)
+            f_range = (max_f - min_f) * 1.1 if max_f > min_f else 1
+            s_range = (max_s - min_s) * 1.1 if max_s > min_s else 1
+            min_f -= (f_range - (max_f - min_f)) / 2
+            min_s -= (s_range - (max_s - min_s)) / 2
+
+        f_range = max(f_range, 1e-9); s_range = max(s_range, 1e-9)
+
+        AXIS_PADDING = 50; plot_w, plot_h = rect.width - AXIS_PADDING*1.5, rect.height - AXIS_PADDING*1.5
+        plot_origin = (rect.left + AXIS_PADDING, rect.bottom - AXIS_PADDING)
+
         pygame.draw.line(screen, COLORS['grid_line'], plot_origin, (plot_origin[0], plot_origin[1] - plot_h), 2)
         pygame.draw.line(screen, COLORS['grid_line'], plot_origin, (plot_origin[0] + plot_w, plot_origin[1]), 2)
         
-        for i in range(6): # Y-axis labels
-            val = min_s + i/5 * s_range; y = plot_origin[1] - (i/5 * plot_h)
+        for i in range(6):
+            val = min_s + i/5 * s_range; y = plot_origin[1] - ((val - min_s) / s_range) * plot_h
+            if plot_origin[1] - plot_h <= y <= plot_origin[1]:
+                pygame.draw.line(screen, COLORS['grid_line'], (plot_origin[0] - 5, y), (plot_origin[0], y), 1)
+                screen.blit(FONT_TINY.render(f"{val:.2f}", True, COLORS['text']), (plot_origin[0] - 45, y - 8))
+        
+        for i in range(6):
+            val = min_f + i/5 * f_range; x = plot_origin[0] + ((val - min_f) / f_range) * plot_w
+            if plot_origin[0] <= x <= plot_origin[0] + plot_w:
+                pygame.draw.line(screen, COLORS['grid_line'], (x, plot_origin[1]), (x, plot_origin[1] + 5), 1)
+                label_surf = FONT_TINY.render(f"{val:.2f}", True, COLORS['text']); label_rect = label_surf.get_rect(centerx=x, top=plot_origin[1] + 10); screen.blit(label_surf, label_rect)
+
+        hover_info = None
+        for i, point_data in enumerate(points):
+            f_val, s_val = plot_f_vals[i], plot_s_vals[i]
+            px = plot_origin[0] + ((f_val - min_f) / f_range) * plot_w
+            py = plot_origin[1] - ((s_val - min_s) / s_range) * plot_h
+            point_rect = pygame.Rect(px - 5, py - 5, 10, 10)
+            if not hover_info and point_rect.collidepoint(mouse_pos):
+                hover_info = {'point_data': point_data, 'pos': (px, py)}
+            else:
+                pygame.draw.circle(screen, COLORS['fn_yellow_fill'], (int(px), int(py)), 4)
+        
+        if self.show_regression_line and len(plot_f_vals) > 1:
+            m, b = np.polyfit(plot_f_vals, plot_s_vals, 1)
+            y1 = m * min_f + b
+            y2 = m * max_f + b
+            start_pos = (plot_origin[0], plot_origin[1] - ((y1 - min_s) / s_range) * plot_h)
+            end_pos = (plot_origin[0] + plot_w, plot_origin[1] - ((y2 - min_s) / s_range) * plot_h)
+            pygame.draw.line(screen, COLORS['regression_line'], start_pos, end_pos, 2)
+
+        if hover_info:
+            px, py = hover_info['pos']; point = hover_info['point_data']
+            pygame.draw.circle(screen, COLORS['tp_green'], (int(px), int(py)), 7)
+            
+            score_label = score_label_map.get(metric, metric.upper())
+            original_score = point[f'original_{metric}']
+            tooltip_text = f"Feat: {point['feature']:.2f}, {score_label}: {original_score:.3f}"
+            if not is_global: tooltip_text = f"Seg: {point['segment']}, " + tooltip_text
+            else: tooltip_text = f"Piece: {point.get('piece', 'N/A')[:20]}... " + tooltip_text
+            self.active_tooltip = {'text': tooltip_text, 'pos': mouse_pos}
+    
+    def _draw_histogram(self, rect, data, title):
+        if len(data) == 0:
+            no_points_surf = FONT_SMALL.render("No data for histogram.", True, COLORS['text']); screen.blit(no_points_surf, no_points_surf.get_rect(center=rect.center)); return
+
+        counts, bin_edges = np.histogram(data, bins='auto')
+        if len(counts) == 0: return
+
+        min_val, max_val = bin_edges[0], bin_edges[-1]
+        max_count = np.max(counts)
+        val_range = max_val - min_val if max_val > min_val else 1
+        count_range = float(max_count) if max_count > 0 else 1.0
+
+        AXIS_PADDING = 50; plot_w, plot_h = rect.width - AXIS_PADDING*1.5, rect.height - AXIS_PADDING*1.5
+        plot_origin = (rect.left + AXIS_PADDING, rect.bottom - AXIS_PADDING)
+        
+        screen.blit(FONT_SMALL.render(title, True, COLORS['text']), (rect.centerx - FONT_SMALL.size(title)[0]/2, rect.top + 10))
+
+        pygame.draw.line(screen, COLORS['grid_line'], plot_origin, (plot_origin[0], plot_origin[1] - plot_h), 2)
+        pygame.draw.line(screen, COLORS['grid_line'], plot_origin, (plot_origin[0] + plot_w, plot_origin[1]), 2)
+
+        for i in range(6):
+            val = i/5 * count_range; y = plot_origin[1] - (i/5 * plot_h)
             pygame.draw.line(screen, COLORS['grid_line'], (plot_origin[0] - 5, y), (plot_origin[0], y), 1)
-            screen.blit(FONT_TINY.render(f"{val:.1f}", True, COLORS['text']), (plot_origin[0] - 35, y - 8))
-        for i in range(6): # X-axis labels
-            val = min_f + i/5 * f_range; x = plot_origin[0] + (i/5 * plot_w)
+            screen.blit(FONT_TINY.render(f"{int(val)}", True, COLORS['text']), (plot_origin[0] - 45, y - 8))
+        
+        for i in range(6):
+            val = min_val + i/5 * val_range; x = plot_origin[0] + (i/5 * plot_w)
             pygame.draw.line(screen, COLORS['grid_line'], (x, plot_origin[1]), (x, plot_origin[1] + 5), 1)
-            label_surf = FONT_TINY.render(f"{val:.1f}", True, COLORS['text']); label_rect = label_surf.get_rect(centerx=x, top=plot_origin[1] + 10); screen.blit(label_surf, label_rect)
+            label_surf = FONT_TINY.render(f"{val:.2f}", True, COLORS['text']); label_rect = label_surf.get_rect(centerx=x, top=plot_origin[1] + 10); screen.blit(label_surf, label_rect)
 
-        for f_val, s_val in zip(feature_values, score_values):
-            px = plot_origin[0] + ((f_val - min_f) / f_range) * plot_w if f_range != 0 else plot_origin[0]
-            py = plot_origin[1] - ((s_val - min_s) / s_range) * plot_h if s_range != 0 else plot_origin[1]
-            pygame.draw.circle(screen, COLORS['fn_yellow_fill'], (int(px), int(py)), 4)
-
+        bar_width = (plot_w / len(counts)) * 0.9
+        for i, count in enumerate(counts):
+            bar_height = (count / count_range) * plot_h
+            left_edge = bin_edges[i]
+            bar_x = plot_origin[0] + ((left_edge - min_val) / val_range) * plot_w
+            bar_rect = pygame.Rect(bar_x, plot_origin[1] - bar_height, bar_width, bar_height)
+            pygame.draw.rect(screen, COLORS['gt_only_color'], bar_rect)
+            pygame.draw.rect(screen, COLORS['checkbox_border'], bar_rect, 1)
 
 if __name__ == '__main__':
     if not os.path.exists(PREDICTED_MIDI_PATH) or not os.path.exists(GROUNDTRUTH_MIDI_PATH):
