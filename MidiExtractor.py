@@ -186,8 +186,7 @@ class MidiExtractor:
             offset_frame = frame + 1
 
             while (offset_frame < onsets.shape[0] 
-                   and frames[offset_frame, pitch].item()
-                   and not onsets[offset_frame, pitch].item()):
+                   and frames[offset_frame, pitch].item()):
                 offset_frame += 1
 
             if offset_frame > onset_frame:
