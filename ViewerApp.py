@@ -938,7 +938,7 @@ class MidiEvaluatorApp:
         selected_text = self.plot_types.get(self.correlation_plot_type, "Select Mode")
         text_surf = FONT_SMALL.render(selected_text, True, COLORS['text'])
         screen.blit(text_surf, (main_rect.x + 10, main_rect.centery - text_surf.get_height() / 2))
-        arrow = "▲" if self.plot_type_dropdown_open else "▼"
+        arrow = "UP" if self.plot_type_dropdown_open else "DN"
         arrow_surf = FONT_SMALL.render(arrow, True, COLORS['text'])
         arrow_rect = arrow_surf.get_rect(centery=main_rect.centery, right=main_rect.right - 10)
         screen.blit(arrow_surf, arrow_rect)

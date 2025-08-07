@@ -212,6 +212,10 @@ class MultiMidiEvaluator:
                     ref_pitches_segment = np.array([])
                 else:
                     est_intervals_segment, est_pitches_segment = pred_midi[:, :2], pred_midi[:, 2]
+                    # 노트의 Interval이 유효한지 확인
+                    interval_mask = est_intervals_segment[:, 1] > est_intervals_segment[:, 0]
+                    est_intervals_segment = est_intervals_segment[interval_mask]
+                    est_pitches_segment = est_pitches_segment[interval_mask]
 
                 # MidiEvaluator를 사용하여 평가 수행
                 scores, matched_ref_indices, matched_est_indices = self.midi_evaluator.evaluate_notes(
