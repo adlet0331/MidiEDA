@@ -10,8 +10,10 @@ from MidiFeatures import MidiFeatures
 
 # --- User Settings ---
 # [IMPORTANT] Please modify the paths below to match your environment.
-PREDICTED_MIDI_PATH = "/Users/simhyeongju/AVAPT/EDA/_transcribed_MIDI/OnsetsAndFrames_2_5sec/"
-GROUNDTRUTH_MIDI_PATH = "/Users/simhyeongju/AVAPT/data/pianovam/"
+PIANOVAM_PREDICTED_MIDI_PATH = "/Users/simhyeongju/AVAPT/EDA/_transcribed_MIDI/OnsetsAndFrames_2_5sec/"
+PIANOVAM_GROUNDTRUTH_PATH = "/Users/simhyeongju/AVAPT/data/pianovam/"
+MIKROKOSMOS_PATH = "/Users/simhyeongju/AVAPT/data/Mikrokosmos-difficulty/midi/"
+MIKROKOSMOS_METADATA_FILE = '/Users/simhyeongju/AVAPT/data/Mikrokosmos-difficulty/metadata/henle_mikrokosmos.json'
 SCORE_SCALE_CONSTANT = 10
 # -------------------------
 
@@ -148,38 +150,42 @@ class MidiEvaluatorApp:
         self.global_correlation_feature_buttons = {}
         self.global_correlation_metric_buttons = {}
 
+        # New UI elements for switching correlation mode
+        self.mode_buttons = {}
+        self.current_mode = 'Transcription' # Default mode
+        
     def _load_global_metadata(self):
-        path = os.path.join(PREDICTED_MIDI_PATH, 'metadata.json')
+        path = os.path.join(PIANOVAM_PREDICTED_MIDI_PATH, 'metadata.json')
         try:
             with open(path, 'r', encoding='utf-8') as f: return json.load(f)
         except FileNotFoundError: print(f"Error: Global metadata.json not found at '{path}'"); return None
 
     def _load_evaluation_metadata(self):
-        path = os.path.join(PREDICTED_MIDI_PATH, 'evaluation.json')
+        path = os.path.join(PIANOVAM_PREDICTED_MIDI_PATH, 'evaluation.json')
         try:
             with open(path, 'r', encoding='utf-8') as f: return json.load(f)
         except FileNotFoundError: print(f"Warning: Evaluation metadata.json not found at '{path}'"); return None
 
     def _load_groundtruth_features_metadata(self):
-        path = os.path.join(GROUNDTRUTH_MIDI_PATH, 'midi', 'features_metadata.json')
+        path = os.path.join(PIANOVAM_GROUNDTRUTH_PATH, 'midi', 'features_metadata.json')
         print(f"Loading ground truth features from '{path}'...")
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                print("✅ Ground truth features loaded successfully.")
-                return data
+            print("✅ Ground truth features loaded successfully.")
+            return data
         except FileNotFoundError:
             print(f"⚠️ Warning: Ground truth features_metadata.json not found at '{path}'")
             return {}
 
     def _load_file_evaluation_metadata(self, filename):
-        path = os.path.join(os.path.join(PREDICTED_MIDI_PATH, filename), 'evaluation.json')
+        path = os.path.join(os.path.join(PIANOVAM_PREDICTED_MIDI_PATH, filename), 'evaluation.json')
         try:
             with open(path, 'r', encoding='utf-8') as f: return json.load(f)
         except FileNotFoundError: print(f"Warning: Evaluation metadata.json not found at '{path}'"); return None
 
     def _load_groundtruth_metadata(self):
-        path = os.path.join(GROUNDTRUTH_MIDI_PATH, 'metadata.json')
+        path = os.path.join(PIANOVAM_GROUNDTRUTH_PATH, 'metadata.json')
         processed_data = {}
         try:
             with open(path, 'r', encoding='utf-8') as f:
@@ -200,7 +206,7 @@ class MidiEvaluatorApp:
             scores = {'p': eval_data.get('Precision', 0.0), 'r': eval_data.get('Recall', 0.0), 'f1': eval_data.get('F1-Score', 0.0)}
             skill = gt_info.get('P1_skill', 'N/A');
             if skill == "Intermediate": skill = "Inter"
-            folder_data_list.append({'name': name, **scores, 'piece': gt_info.get('piece', 'N/A')[:50], 'split': gt_info.get('split', 'N/A'), 'player': gt_info.get('P1_name', 'N/A'), 'skill': skill})
+            folder_data_list.append({'name': name, **scores, 'piece': gt_info.get('piece', 'N/A')[:50], 'player': gt_info.get('P1_name', 'N/A'), 'skill': skill, 'split': gt_info.get('split', 'N/A')})
         self._sort_list(folder_data_list, self.file_list_sort_config); print("Sorting complete."); return folder_data_list
 
     def _sort_list(self, data_list, config):
@@ -288,7 +294,7 @@ class MidiEvaluatorApp:
                     if event.key == pygame.K_n:
                         self.correlation_normalize = not self.correlation_normalize
                     elif event.key == pygame.K_r:
-                         self.show_regression_line = not self.show_regression_line
+                             self.show_regression_line = not self.show_regression_line
                     elif event.key == pygame.K_1:
                         self.correlation_plot_type = 'scatter'
                     elif event.key == pygame.K_2:
@@ -424,6 +430,13 @@ class MidiEvaluatorApp:
             self.plot_type_dropdown_open = False
         # -------------------------------------------------------------
 
+        # Handle mode switch button for GLOBAL view only
+        if is_global:
+            if 'toggle' in self.mode_buttons and self.mode_buttons['toggle'].collidepoint(pos):
+                self.current_mode = 'Human Playing' if self.current_mode == 'Transcription' else 'Transcription'
+                self.calculate_global_correlations() # Recalculate correlations for global view
+                return
+
         back_button_rect = pygame.Rect(SCREEN_WIDTH - 150, 20, 130, 40)
         if back_button_rect.collidepoint(pos):
             self._go_back(); return
@@ -481,7 +494,7 @@ class MidiEvaluatorApp:
                 scores = eval_data_for_file.get(str(seg_num), {})
                 segment_list.append({'num': seg_num, 'p': scores.get('Precision', 0.0), 'r': scores.get('Recall', 0.0), 'f1': scores.get('F1-Score', 0.0)})
             print("Calculating ground truth features for all segments...")
-            base_name = selected_filename.replace('_16020Hz', ''); gt_path = os.path.join(GROUNDTRUTH_MIDI_PATH, 'midi', f"{base_name}.mid")
+            base_name = selected_filename.replace('_16020Hz', ''); gt_path = os.path.join(PIANOVAM_GROUNDTRUTH_PATH, 'midi', f"{base_name}.mid")
             gt_midi = None
             if os.path.exists(gt_path):
                 try: gt_midi = pretty_midi.PrettyMIDI(gt_path)
@@ -511,7 +524,7 @@ class MidiEvaluatorApp:
         except Exception as e: print(f"Error loading detail data: {e}"); self.detail_data = {}
 
     def calculate_correlations(self):
-        print("Calculating feature-score correlations for segments...")
+        print(f"Calculating feature-score correlations for segments... (Mode: {self.current_mode})")
         self.correlation_data = {}
         segment_list = self.detail_data.get('segment_list', [])
         if not segment_list:
@@ -535,6 +548,7 @@ class MidiEvaluatorApp:
                 feature_value = segment.get('features', {}).get(feature_key)
                 p, r, f1 = segment.get('p'), segment.get('r'), segment.get('f1')
                 if feature_value is not None and all(s is not None for s in [p, r, f1]):
+                    # Use Transcription mode scores for now
                     tp = ((1 - p) / denom_p * SCORE_SCALE_CONSTANT) if denom_p > 0 else 0
                     tr = ((1 - r) / denom_r * SCORE_SCALE_CONSTANT) if denom_r > 0 else 0
                     tf1 = ((1 - f1) / denom_f1 * SCORE_SCALE_CONSTANT) if denom_f1 > 0 else 0
@@ -549,10 +563,10 @@ class MidiEvaluatorApp:
 
             correlations = {}
             feature_values = np.array([d['feature'] for d in data_points])
-            original_scores = {m: np.array([d[f'original_{m}'] for d in data_points]) for m in ['p', 'r', 'f1']}
             
+            # The score calculation logic remains reverted to the original for now.
             for metric in ['p', 'r', 'f1']:
-                score_values = original_scores[metric]
+                score_values = np.array([d[metric] for d in data_points])
                 if np.std(feature_values) == 0 or np.std(score_values) == 0:
                     corr_coeff = 0.0
                 else:
@@ -598,6 +612,8 @@ class MidiEvaluatorApp:
                 p, r, f1 = file_info.get('p'), file_info.get('r'), file_info.get('f1')
 
                 if feature_value is not None and all(s is not None for s in [p, r, f1]):
+                    # Score calculation logic for global correlation is not dependent on the mode, it uses original scores.
+                    # This section is kept as it was.
                     tp = ((1 - p) / denom_p * SCORE_SCALE_CONSTANT) if denom_p > 0 else 0
                     tr = ((1 - r) / denom_r * SCORE_SCALE_CONSTANT) if denom_r > 0 else 0
                     tf1 = ((1 - f1) / denom_f1 * SCORE_SCALE_CONSTANT) if denom_f1 > 0 else 0
@@ -612,10 +628,9 @@ class MidiEvaluatorApp:
             
             correlations = {}
             feature_values = np.array([d['feature'] for d in data_points])
-            original_scores = {m: np.array([d[f'original_{m}'] for d in data_points]) for m in ['p', 'r', 'f1']}
-
+            # The score calculation logic remains reverted to the original for now.
             for metric in ['p', 'r', 'f1']:
-                score_values = original_scores[metric]
+                score_values = np.array([d[metric] for d in data_points])
                 if np.std(feature_values) == 0 or np.std(score_values) == 0:
                     corr_coeff = 0.0
                 else:
@@ -641,7 +656,7 @@ class MidiEvaluatorApp:
         try:
             cut_length = self.global_metadata['midi_extractor_settings']['segment_length_sec']; start_time = (self.selected_segment - 1) * cut_length; end_time = start_time + cut_length
             selected_filename = self.selected_file_info['name']; base_name = selected_filename.replace('_16020Hz', '')
-            pred_path = os.path.join(PREDICTED_MIDI_PATH, selected_filename, f"{self.selected_segment}.mid"); gt_path = os.path.join(GROUNDTRUTH_MIDI_PATH, 'midi', f"{base_name}.mid")
+            pred_path = os.path.join(PIANOVAM_PREDICTED_MIDI_PATH, selected_filename, f"{self.selected_segment}.mid"); gt_path = os.path.join(PIANOVAM_GROUNDTRUTH_PATH, 'midi', f"{base_name}.mid")
             try:
                 if os.path.exists(pred_path):
                     pred_midi = pretty_midi.PrettyMIDI(pred_path)
@@ -682,7 +697,7 @@ class MidiEvaluatorApp:
             r = total_tp / (total_tp + total_tn) if (total_tp + total_tn) > 0 else 0.0
             f1 = 2 * p * r / (p + r) if (p + r) > 0 else 0.0; frame_scores = {'p': p, 'r': r, 'f1': f1}
             frame_counts = {'TP': total_tp, 'FP': total_fp, 'TN': total_tn}
-            audio_path = os.path.join(GROUNDTRUTH_MIDI_PATH, 'audio', f"{selected_filename}.wav")
+            audio_path = os.path.join(PIANOVAM_GROUNDTRUTH_PATH, 'audio', f"{selected_filename}.wav")
             if os.path.exists(audio_path): full_audio = AudioSegment.from_wav(audio_path); audio_slice = full_audio[start_time * 1000 : end_time * 1000]
             else: print(f"Warning: Audio file not found at '{audio_path}'")
         except Exception as e: print(f"An unexpected error occurred in load_piano_roll_data: {e}")
@@ -752,7 +767,7 @@ class MidiEvaluatorApp:
     def draw_detail_view_screen(self):
         back_button_rect = pygame.Rect(SCREEN_WIDTH - 150, 20, 130, 40)
         fs_button_rect = self.feature_select_button_rect
-        corr_button_rect = self.detail_corr_button_rect
+        corr_button_rect = pygame.Rect(self.feature_select_button_rect.x - 170, 20, 160, 40)
         mouse_pos = pygame.mouse.get_pos()
         
         for rect, text in [(back_button_rect, "<< Back"), (fs_button_rect, "Select Columns"), (corr_button_rect, "Correlations")]:
@@ -979,11 +994,37 @@ class MidiEvaluatorApp:
         pygame.draw.rect(screen, COLORS['button_hover'] if back_button_rect.collidepoint(mouse_pos) else COLORS['button'], back_button_rect, border_radius=5)
         screen.blit(FONT_SMALL.render("<< Back", True, COLORS['text']), (back_button_rect.x + 30, back_button_rect.y + 10))
         
-        # Define DropDown rects for click detection and drawing
-        self.dropdown_rects.clear()
-        dropdown_w, dropdown_h = 240, 40
-        dropdown_x = back_button_rect.left - dropdown_w - 10
-        self.dropdown_rects['main'] = pygame.Rect(dropdown_x, back_button_rect.y, dropdown_w, dropdown_h)
+        # Draw mode switch button ONLY for global view
+        if is_global:
+            mode_width = 250
+            mode_button_x = back_button_rect.left - (mode_width + 10)
+            
+            # Determine the text for the button based on the current mode
+            button_text = f"Transcription Score" if self.current_mode == 'Transcription' else f"Henle Score"
+            
+            mode_rect = pygame.Rect(mode_button_x, back_button_rect.y, mode_width, 40)
+            color = COLORS['button']
+            if mode_rect.collidepoint(mouse_pos):
+                color = COLORS['button_hover']
+            pygame.draw.rect(screen, color, mode_rect, border_radius=5)
+            text_surf = FONT_SMALL.render(button_text, True, COLORS['text'])
+            text_rect = text_surf.get_rect(center=mode_rect.center)
+            screen.blit(text_surf, text_rect)
+            self.mode_buttons['toggle'] = mode_rect
+
+            # Re-position dropdown and controls based on new buttons
+            dropdown_w, dropdown_h = 240, 40
+            dropdown_x = mode_rect.left - dropdown_w - 10
+            self.dropdown_rects['main'] = pygame.Rect(dropdown_x, back_button_rect.y, dropdown_w, dropdown_h)
+            
+            btn_x = PLOT_AREA_RECT.left
+            
+        else: # not global view
+            self.mode_buttons = {} # Clear for global view
+            dropdown_w, dropdown_h = 240, 40
+            dropdown_x = back_button_rect.left - dropdown_w - 10
+            self.dropdown_rects['main'] = pygame.Rect(dropdown_x, back_button_rect.y, dropdown_w, dropdown_h)
+            btn_x = PLOT_AREA_RECT.left
 
         self.correlation_controls.clear()
         feature_button_rects.clear(); pygame.draw.rect(screen, COLORS['header'], (PADDING, 100, LEFT_PANEL_WIDTH - PADDING, SCREEN_HEIGHT - 200), border_radius=5)
@@ -1001,7 +1042,7 @@ class MidiEvaluatorApp:
 
         pygame.draw.rect(screen, COLORS['piano_roll_bg'], PLOT_AREA_RECT); pygame.draw.rect(screen, COLORS['grid_line'], PLOT_AREA_RECT, 2)
         
-        btn_x, btn_y = PLOT_AREA_RECT.left, PLOT_AREA_RECT.top - 45
+        btn_y = PLOT_AREA_RECT.top - 45
         metric_button_rects.clear()
         for metric in ['f1', 'p', 'r']:
             label = {"f1": "F1", "p": "Precision", "r": "Recall"}[metric]; is_selected = selected_metric == metric
@@ -1022,10 +1063,11 @@ class MidiEvaluatorApp:
 
         feature_data = correlation_data[selected_feature]; points = feature_data['points']
         if not points:
-            no_points_surf = FONT_SMALL.render("No data points for this feature.", True, COLORS['text']); screen.blit(no_points_surf, no_points_surf.get_rect(center=PLOT_AREA_RECT.center)); return
+            no_points_surf = FONT_MAIN.render("No data points for this feature.", True, COLORS['text']); screen.blit(no_points_surf, no_points_surf.get_rect(center=PLOT_AREA_RECT.center)); return
 
         plot_feature_values = np.array([p['feature'] for p in points])
         plot_score_values = np.array([p[selected_metric] for p in points])
+
 
         if self.correlation_plot_type == 'scatter':
             self._draw_scatter_plot(PLOT_AREA_RECT, plot_feature_values, plot_score_values, points, is_global, selected_metric, feature_data['label'], feature_data['correlations'][selected_metric])
@@ -1090,6 +1132,9 @@ class MidiEvaluatorApp:
                 pygame.draw.circle(screen, COLORS['fn_yellow_fill'], (int(px), int(py)), 4)
         
         if self.show_regression_line and len(plot_f_vals) > 1:
+            # Note: Regression calculation should be done on the un-normalized data if possible
+            # But the plot is drawn using the normalized data.
+            # For simplicity, we calculate regression on the plotted data.
             m, b = np.polyfit(plot_f_vals, plot_s_vals, 1)
             y1 = m * min_f + b
             y2 = m * max_f + b
@@ -1110,7 +1155,7 @@ class MidiEvaluatorApp:
     
     def _draw_histogram(self, rect, data, title):
         if len(data) == 0:
-            no_points_surf = FONT_SMALL.render("No data for histogram.", True, COLORS['text']); screen.blit(no_points_surf, no_points_surf.get_rect(center=rect.center)); return
+            no_points_surf = FONT_MAIN.render("No data for histogram.", True, COLORS['text']); screen.blit(no_points_surf, no_points_surf.get_rect(center=rect.center)); return
 
         counts, bin_edges = np.histogram(data, bins='auto')
         if len(counts) == 0: return
@@ -1148,7 +1193,7 @@ class MidiEvaluatorApp:
             pygame.draw.rect(screen, COLORS['checkbox_border'], bar_rect, 1)
 
 if __name__ == '__main__':
-    if not os.path.exists(PREDICTED_MIDI_PATH) or not os.path.exists(GROUNDTRUTH_MIDI_PATH):
-        print("="*60 + "\n! ! ! CONFIGURATION ERROR ! ! !\n" + f"Cannot find PREDICTED_MIDI_PATH or GROUNDTRUTH_MIDI_PATH.\n" + "Please correctly modify the path settings at the top of the script.\n" + f"Predicted MIDI Path: {PREDICTED_MIDI_PATH}\n" + f"Ground Truth MIDI Path: {GROUNDTRUTH_MIDI_PATH}\n" + "="*60)
+    if not os.path.exists(PIANOVAM_PREDICTED_MIDI_PATH) or not os.path.exists(PIANOVAM_GROUNDTRUTH_PATH):
+        print("="*60 + "\n! ! ! CONFIGURATION ERROR ! ! !\n" + f"Cannot find PREDICTED_MIDI_PATH or GROUNDTRUTH_MIDI_PATH.\n" + "Please correctly modify the path settings at the top of the script.\n" + f"Predicted MIDI Path: {PIANOVAM_PREDICTED_MIDI_PATH}\n" + f"Ground Truth MIDI Path: {PIANOVAM_GROUNDTRUTH_PATH}\n" + "="*60)
     else:
         app = MidiEvaluatorApp(); app.run()
