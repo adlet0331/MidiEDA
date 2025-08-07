@@ -64,13 +64,12 @@ def slice_midi(pitches_hz, intervals_sec, velocities, num_segments, segment_leng
             note_end_time = intervals_sec[note_idx, 1]
             
             if note_start_time < segment_end_time and note_end_time > segment_start_time:
-                segment_pitches.append(pitches_hz[note_idx])
-                
                 adjusted_interval = [
                     max(note_start_time - segment_start_time, 0),
                     min(note_end_time - segment_start_time, segment_length_sec)
                 ]
                 if adjusted_interval[0] < adjusted_interval[1]:
+                    segment_pitches.append(pitches_hz[note_idx])
                     segment_intervals.append(adjusted_interval)
                     segment_velocities.append(velocities[note_idx])
 
