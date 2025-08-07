@@ -5,6 +5,7 @@ import numpy as np
 import pretty_midi
 import mir_eval
 import io
+import re  # <-- Regular expression module added
 from pydub import AudioSegment
 from MidiFeatures import MidiFeatures
 
@@ -13,6 +14,7 @@ from MidiFeatures import MidiFeatures
 PIANOVAM_PREDICTED_MIDI_PATH = "/Users/simhyeongju/AVAPT/EDA/_transcribed_MIDI/OnsetsAndFrames_2_5sec/"
 PIANOVAM_GROUNDTRUTH_PATH = "/Users/simhyeongju/AVAPT/data/pianovam/"
 MIKROKOSMOS_PATH = "/Users/simhyeongju/AVAPT/data/Mikrokosmos-difficulty/midi/"
+# The user must ensure this file exists at the specified path.
 MIKROKOSMOS_METADATA_FILE = '/Users/simhyeongju/AVAPT/data/Mikrokosmos-difficulty/metadata/henle_mikrokosmos.json'
 SCORE_SCALE_CONSTANT = 10
 # -------------------------
@@ -61,6 +63,11 @@ class MidiEvaluatorApp:
         self.groundtruth_metadata = self._load_groundtruth_metadata()
         self.evaluation_metadata = self._load_evaluation_metadata()
         self.groundtruth_features_metadata = self._load_groundtruth_features_metadata()
+        
+        # --- Load Henle scores ---
+        # Placeholder for future PianoVam Henle data, making the structure extensible.
+        self.pianovam_henle_scores = {} 
+        self.mikrokosmos_henle_scores = self._load_json_file(MIKROKOSMOS_METADATA_FILE, "Mikrokosmos Henle Scores")
 
         self.FILE_COLUMNS = {
             'index': {'label': '#', 'width': 60, 'key': 'index'},
@@ -152,8 +159,26 @@ class MidiEvaluatorApp:
 
         # New UI elements for switching correlation mode
         self.mode_buttons = {}
-        self.current_mode = 'Transcription' # Default mode
+        self.current_mode = 'Transcription' # Default mode: 'Transcription' or 'Human Playing'
         
+    def _load_json_file(self, path, name_for_log):
+        """A helper function to load a JSON file with error handling."""
+        print(f"Loading {name_for_log} from '{path}'...")
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            print(f"✅ {name_for_log} loaded successfully.")
+            return data
+        except FileNotFoundError:
+            print(f"❌ ERROR: {name_for_log} file not found at '{path}'.")
+            return {}
+        except json.JSONDecodeError:
+            print(f"❌ ERROR: Could not decode {name_for_log} file at '{path}'. Check for syntax errors.")
+            return {}
+        except Exception as e:
+            print(f"❌ An unexpected error occurred while loading {name_for_log}: {e}")
+            return {}
+
     def _load_global_metadata(self):
         path = os.path.join(PIANOVAM_PREDICTED_MIDI_PATH, 'metadata.json')
         try:
@@ -167,16 +192,27 @@ class MidiEvaluatorApp:
         except FileNotFoundError: print(f"Warning: Evaluation metadata.json not found at '{path}'"); return None
 
     def _load_groundtruth_features_metadata(self):
-        path = os.path.join(PIANOVAM_GROUNDTRUTH_PATH, 'midi', 'features_metadata.json')
-        print(f"Loading ground truth features from '{path}'...")
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            print("✅ Ground truth features loaded successfully.")
-            return data
-        except FileNotFoundError:
-            print(f"⚠️ Warning: Ground truth features_metadata.json not found at '{path}'")
-            return {}
+        """Loads and combines feature metadata from all specified data sources."""
+        combined_features = {}
+
+        # 1. Load PianoVam features
+        pianovam_path = os.path.join(PIANOVAM_GROUNDTRUTH_PATH, 'midi', 'features_metadata.json')
+        pianovam_data = self._load_json_file(pianovam_path, "PianoVam GT Features")
+        if pianovam_data:
+            combined_features.update(pianovam_data)
+            
+        # 2. Load Mikrokosmos features
+        mikrokosmos_path = os.path.join(MIKROKOSMOS_PATH, 'features_metadata.json')
+        mikrokosmos_data = self._load_json_file(mikrokosmos_path, "Mikrokosmos GT Features")
+        if mikrokosmos_data:
+            combined_features.update(mikrokosmos_data)
+
+        if not combined_features:
+            print(f"⚠️ Warning: Could not load any ground truth features metadata.")
+        else:
+            print("✅ Combined ground truth features metadata loaded.")
+        
+        return combined_features
 
     def _load_file_evaluation_metadata(self, filename):
         path = os.path.join(os.path.join(PIANOVAM_PREDICTED_MIDI_PATH, filename), 'evaluation.json')
@@ -278,6 +314,9 @@ class MidiEvaluatorApp:
                                     else: self.selected_correlation_feature = feature_keys[0]
                     
                     if event.key in [pygame.K_a, pygame.K_d]:
+                        # Do not change metric for Henle score mode
+                        if is_global and self.current_mode == 'Human Playing':
+                            continue
                         selected_metric = self.selected_global_score_metric if is_global else self.selected_score_metric
                         metrics = ['f1', 'p', 'r']
                         try:
@@ -294,7 +333,7 @@ class MidiEvaluatorApp:
                     if event.key == pygame.K_n:
                         self.correlation_normalize = not self.correlation_normalize
                     elif event.key == pygame.K_r:
-                             self.show_regression_line = not self.show_regression_line
+                            self.show_regression_line = not self.show_regression_line
                     elif event.key == pygame.K_1:
                         self.correlation_plot_type = 'scatter'
                     elif event.key == pygame.K_2:
@@ -434,7 +473,12 @@ class MidiEvaluatorApp:
         if is_global:
             if 'toggle' in self.mode_buttons and self.mode_buttons['toggle'].collidepoint(pos):
                 self.current_mode = 'Human Playing' if self.current_mode == 'Transcription' else 'Transcription'
-                self.calculate_global_correlations() # Recalculate correlations for global view
+                # When mode changes, recalculate data and reset selections
+                if self.current_mode == 'Human Playing':
+                    self.selected_global_score_metric = 'henle'
+                else:
+                    self.selected_global_score_metric = 'f1'
+                self.calculate_global_correlations() 
                 return
 
         back_button_rect = pygame.Rect(SCREEN_WIDTH - 150, 20, 130, 40)
@@ -581,7 +625,76 @@ class MidiEvaluatorApp:
         print("Segment correlation calculation complete.")
 
     def calculate_global_correlations(self):
-        print("Calculating global feature-score correlations...")
+        # --- NEW: Main logic handler for different correlation modes ---
+        if self.current_mode == 'Human Playing':
+            self._calculate_henle_correlations()
+        else: # Default 'Transcription' mode
+            self._calculate_transcription_correlations()
+
+    def _calculate_henle_correlations(self):
+        """Calculates correlations between musical features and Henle difficulty scores for all available datasets."""
+        print("Calculating global feature-score correlations... (Mode: Henle Score)")
+        self.global_correlation_data = {}
+
+        # 필요한 데이터가 로드되었는지 확인합니다.
+        if not self.mikrokosmos_henle_scores:
+            print("⚠️ Cannot calculate Henle correlations: Mikrokosmos Henle score metadata not loaded.")
+            return
+        if not self.groundtruth_features_metadata:
+            print("⚠️ Cannot calculate Henle correlations: Missing ground truth features metadata.")
+            return
+
+        # 분석할 모든 음악적 피처에 대해 반복합니다.
+        for feature_label, (feature_key, _, _) in self.features_info.items():
+            data_points = []
+            
+            # --- 1. Mikrokosmos 데이터 처리 ---
+            # Henle 점수 데이터를 기준으로 직접 반복하여 Mikrokosmos 데이터셋을 처리합니다.
+            for piece_num, henle_score in self.mikrokosmos_henle_scores.items():
+                # 피처 파일 키는 곡 번호를 기반으로 생성합니다 (예: "1.mid").
+                feature_file_key = f"{piece_num}.mid"
+                feature_data = self.groundtruth_features_metadata.get(feature_file_key, {})
+
+                if feature_data.get('available'):
+                    feature_value = feature_data.get('numeric_features', {}).get(feature_key)
+                    if feature_value is not None:
+                        data_points.append({
+                            'feature': feature_value,
+                            'henle': henle_score,
+                            'piece': f"Mikrokosmos No. {piece_num}",
+                        })
+
+            # --- 2. (향후 확장용) PianoVam 데이터 처리 ---
+            # 이 블록은 나중에 PianoVam Henle 점수 데이터가 추가될 경우를 대비한 것입니다.
+            if self.pianovam_henle_scores:
+                # for file_info in self.audio_folders_data: # self.audio_folders_data는 PianoVam 연주 목록입니다.
+                #     # ... 향후 PianoVam Henle 점수 조회 및 데이터 포인트 추가 로직 ...
+                pass
+
+            # --- 3. 현재 피처에 대한 상관관계 계산 ---
+            if len(data_points) >= 2:
+                correlations = {}
+                feature_values = np.array([d['feature'] for d in data_points])
+                score_values = np.array([d['henle'] for d in data_points])
+                
+                if np.std(feature_values) == 0 or np.std(score_values) == 0:
+                    corr_coeff = 0.0
+                else:
+                    corr_matrix = np.corrcoef(feature_values, score_values)
+                    corr_coeff = corr_matrix[0, 1]
+                correlations['henle'] = corr_coeff if not np.isnan(corr_coeff) else 0.0
+
+                self.global_correlation_data[feature_key] = {
+                    'label': feature_label, 'correlations': correlations, 'points': data_points
+                }
+        
+        if not self.selected_global_correlation_feature and self.global_correlation_data:
+            self.selected_global_correlation_feature = next(iter(self.global_correlation_data.keys()))
+        print("✅ Global Henle correlation calculation complete.")
+
+    def _calculate_transcription_correlations(self):
+        """Calculates correlations between musical features and transcription accuracy scores."""
+        print("Calculating global feature-score correlations... (Mode: Transcription)")
         self.global_correlation_data = {}
         file_list = self.audio_folders_data
         features_db = self.groundtruth_features_metadata
@@ -593,13 +706,9 @@ class MidiEvaluatorApp:
         all_r = [f['r'] for f in file_list if f.get('r') is not None]
         all_f1 = [f['f1'] for f in file_list if f.get('f1') is not None]
 
-        min_p = min(all_p) if all_p else 1.0
-        min_r = min(all_r) if all_r else 1.0
+        min_p = min(all_p) if all_p else 1.0; min_r = min(all_r) if all_r else 1.0
         min_f1 = min(all_f1) if all_f1 else 1.0
-
-        denom_p = 1 - min_p
-        denom_r = 1 - min_r
-        denom_f1 = 1 - min_f1
+        denom_p = 1 - min_p; denom_r = 1 - min_r; denom_f1 = 1 - min_f1
 
         for feature_label, (feature_key, _, _) in self.features_info.items():
             data_points = []
@@ -608,12 +717,11 @@ class MidiEvaluatorApp:
                 feature_file_key = f"{record_time}.mid"
                 feature_data = features_db.get(feature_file_key, {})
                 if not feature_data.get('available'): continue
+                
                 feature_value = feature_data.get('numeric_features', {}).get(feature_key)
                 p, r, f1 = file_info.get('p'), file_info.get('r'), file_info.get('f1')
 
                 if feature_value is not None and all(s is not None for s in [p, r, f1]):
-                    # Score calculation logic for global correlation is not dependent on the mode, it uses original scores.
-                    # This section is kept as it was.
                     tp = ((1 - p) / denom_p * SCORE_SCALE_CONSTANT) if denom_p > 0 else 0
                     tr = ((1 - r) / denom_r * SCORE_SCALE_CONSTANT) if denom_r > 0 else 0
                     tf1 = ((1 - f1) / denom_f1 * SCORE_SCALE_CONSTANT) if denom_f1 > 0 else 0
@@ -628,7 +736,6 @@ class MidiEvaluatorApp:
             
             correlations = {}
             feature_values = np.array([d['feature'] for d in data_points])
-            # The score calculation logic remains reverted to the original for now.
             for metric in ['p', 'r', 'f1']:
                 score_values = np.array([d[metric] for d in data_points])
                 if np.std(feature_values) == 0 or np.std(score_values) == 0:
@@ -639,14 +746,12 @@ class MidiEvaluatorApp:
                 correlations[metric] = corr_coeff if not np.isnan(corr_coeff) else 0.0
 
             self.global_correlation_data[feature_key] = {
-                'label': feature_label,
-                'correlations': correlations,
-                'points': data_points
+                'label': feature_label, 'correlations': correlations, 'points': data_points
             }
         
         if not self.selected_global_correlation_feature and self.global_correlation_data:
             self.selected_global_correlation_feature = next(iter(self.global_correlation_data.keys()))
-        print("Global correlation calculation complete.")
+        print("✅ Global transcription correlation calculation complete.")
 
     def load_piano_roll_data(self):
         if not self.global_metadata: print("Warning: Global metadata not loaded."); self.piano_roll_data = {}; return
@@ -894,8 +999,8 @@ class MidiEvaluatorApp:
     def _draw_piano_roll_stats(self):
         if not self.piano_roll_data: return
         scores = self.piano_roll_data.get('frame_scores', {}); counts = self.piano_roll_data.get('frame_counts', {})
-        score_text = f"Frame Precision: {scores.get('p', 0):.4f}   Recall: {scores.get('r', 0):.4f}   F1-Score: {scores.get('f1', 0):.4f}"
-        count_text = f"Frame TP: {counts.get('TP', 0)}   Extra Notes (FP): {counts.get('FP', 0)}   Missed Notes (TN): {counts.get('TN', 0)}"
+        score_text = f"Frame Precision: {scores.get('p', 0):.4f}    Recall: {scores.get('r', 0):.4f}    F1-Score: {scores.get('f1', 0):.4f}"
+        count_text = f"Frame TP: {counts.get('TP', 0)}    Extra Notes (FP): {counts.get('FP', 0)}    Missed Notes (TN): {counts.get('TN', 0)}"
         screen.blit(FONT_SMALL.render(score_text, True, COLORS['text']), (50, 45)); screen.blit(FONT_SMALL.render(count_text, True, COLORS['text']), (50, 70))
 
     def draw_piano_roll_screen(self):
@@ -994,33 +1099,28 @@ class MidiEvaluatorApp:
         pygame.draw.rect(screen, COLORS['button_hover'] if back_button_rect.collidepoint(mouse_pos) else COLORS['button'], back_button_rect, border_radius=5)
         screen.blit(FONT_SMALL.render("<< Back", True, COLORS['text']), (back_button_rect.x + 30, back_button_rect.y + 10))
         
-        # Draw mode switch button ONLY for global view
+        # --- NEW: Draw mode switch button ONLY for global view ---
         if is_global:
             mode_width = 250
             mode_button_x = back_button_rect.left - (mode_width + 10)
             
-            # Determine the text for the button based on the current mode
             button_text = f"Transcription Score" if self.current_mode == 'Transcription' else f"Henle Score"
             
             mode_rect = pygame.Rect(mode_button_x, back_button_rect.y, mode_width, 40)
-            color = COLORS['button']
-            if mode_rect.collidepoint(mouse_pos):
-                color = COLORS['button_hover']
+            color = COLORS['button_hover'] if mode_rect.collidepoint(mouse_pos) else COLORS['button']
             pygame.draw.rect(screen, color, mode_rect, border_radius=5)
             text_surf = FONT_SMALL.render(button_text, True, COLORS['text'])
             text_rect = text_surf.get_rect(center=mode_rect.center)
             screen.blit(text_surf, text_rect)
             self.mode_buttons['toggle'] = mode_rect
 
-            # Re-position dropdown and controls based on new buttons
             dropdown_w, dropdown_h = 240, 40
             dropdown_x = mode_rect.left - dropdown_w - 10
             self.dropdown_rects['main'] = pygame.Rect(dropdown_x, back_button_rect.y, dropdown_w, dropdown_h)
-            
             btn_x = PLOT_AREA_RECT.left
             
         else: # not global view
-            self.mode_buttons = {} # Clear for global view
+            self.mode_buttons = {}
             dropdown_w, dropdown_h = 240, 40
             dropdown_x = back_button_rect.left - dropdown_w - 10
             self.dropdown_rects['main'] = pygame.Rect(dropdown_x, back_button_rect.y, dropdown_w, dropdown_h)
@@ -1044,12 +1144,21 @@ class MidiEvaluatorApp:
         
         btn_y = PLOT_AREA_RECT.top - 45
         metric_button_rects.clear()
-        for metric in ['f1', 'p', 'r']:
-            label = {"f1": "F1", "p": "Precision", "r": "Recall"}[metric]; is_selected = selected_metric == metric
-            btn_rect = pygame.Rect(btn_x, btn_y, 120, 35); metric_button_rects[metric] = btn_rect
-            color = COLORS['button'] if not is_selected else COLORS['tp_green']
-            pygame.draw.rect(screen, color, btn_rect, border_radius=5)
-            text_surf = FONT_SMALL.render(label, True, COLORS['text']); text_rect = text_surf.get_rect(center=btn_rect.center); screen.blit(text_surf, text_rect); btn_x += 130
+
+        # --- NEW: Dynamically draw score metric buttons based on mode ---
+        if is_global and self.current_mode == 'Human Playing':
+            label_text = "Score: Henle Difficulty"
+            text_surf = FONT_SMALL.render(label_text, True, COLORS['text'])
+            text_rect = text_surf.get_rect(left=btn_x, centery=btn_y + 35 / 2)
+            screen.blit(text_surf, text_rect)
+            btn_x += text_rect.width + 20
+        else:
+            for metric in ['f1', 'p', 'r']:
+                label = {"f1": "F1", "p": "Precision", "r": "Recall"}[metric]; is_selected = selected_metric == metric
+                btn_rect = pygame.Rect(btn_x, btn_y, 120, 35); metric_button_rects[metric] = btn_rect
+                color = COLORS['button'] if not is_selected else COLORS['tp_green']
+                pygame.draw.rect(screen, color, btn_rect, border_radius=5)
+                text_surf = FONT_SMALL.render(label, True, COLORS['text']); text_rect = text_surf.get_rect(center=btn_rect.center); screen.blit(text_surf, text_rect); btn_x += 130
         
         checkbox_size = 20; btn_x += 20
         for key, text in [('normalize', 'Normalize (N)'), ('regression', 'Regression (R)')]:
@@ -1066,8 +1175,9 @@ class MidiEvaluatorApp:
             no_points_surf = FONT_MAIN.render("No data points for this feature.", True, COLORS['text']); screen.blit(no_points_surf, no_points_surf.get_rect(center=PLOT_AREA_RECT.center)); return
 
         plot_feature_values = np.array([p['feature'] for p in points])
-        plot_score_values = np.array([p[selected_metric] for p in points])
-
+        # --- NEW: Use correct score metric based on mode ---
+        score_key = 'henle' if is_global and self.current_mode == 'Human Playing' else selected_metric
+        plot_score_values = np.array([p[score_key] for p in points])
 
         if self.correlation_plot_type == 'scatter':
             self._draw_scatter_plot(PLOT_AREA_RECT, plot_feature_values, plot_score_values, points, is_global, selected_metric, feature_data['label'], feature_data['correlations'][selected_metric])
@@ -1078,7 +1188,8 @@ class MidiEvaluatorApp:
             
     def _draw_scatter_plot(self, rect, f_vals, s_vals, points, is_global, metric, feature_label, corr_value):
         mouse_pos = pygame.mouse.get_pos()
-        score_label_map = {"f1": "F1-Score", "p": "Precision", "r": "Recall"}
+        # --- NEW: Add Henle Score to map ---
+        score_label_map = {"f1": "F1-Score", "p": "Precision", "r": "Recall", "henle": "Henle Score"}
 
         plot_f_vals = f_vals.copy()
         plot_s_vals = s_vals.copy()
@@ -1132,9 +1243,6 @@ class MidiEvaluatorApp:
                 pygame.draw.circle(screen, COLORS['fn_yellow_fill'], (int(px), int(py)), 4)
         
         if self.show_regression_line and len(plot_f_vals) > 1:
-            # Note: Regression calculation should be done on the un-normalized data if possible
-            # But the plot is drawn using the normalized data.
-            # For simplicity, we calculate regression on the plotted data.
             m, b = np.polyfit(plot_f_vals, plot_s_vals, 1)
             y1 = m * min_f + b
             y2 = m * max_f + b
@@ -1147,10 +1255,18 @@ class MidiEvaluatorApp:
             pygame.draw.circle(screen, COLORS['tp_green'], (int(px), int(py)), 7)
             
             score_label = score_label_map.get(metric, metric.upper())
-            original_score = point[f'original_{metric}']
-            tooltip_text = f"Feat: {point['feature']:.2f}, {score_label}: {original_score:.3f}"
-            if not is_global: tooltip_text = f"Seg: {point['segment']}, " + tooltip_text
-            else: tooltip_text = f"Piece: {point.get('piece', 'N/A')[:20]}... " + tooltip_text
+            # --- NEW: Tooltip logic for both modes ---
+            if metric == 'henle':
+                tooltip_text = f"Feat: {point['feature']:.2f}, Henle: {point['henle']}"
+                if is_global:
+                    tooltip_text = f"Piece: {point.get('piece', 'N/A')[:20]}... " + tooltip_text
+            else: # Transcription scores
+                original_score = point.get(f'original_{metric}', point.get(metric, 0))
+                tooltip_text = f"Feat: {point['feature']:.2f}, {score_label}: {original_score:.3f}"
+                if not is_global:
+                    tooltip_text = f"Seg: {point['segment']}, " + tooltip_text
+                else:
+                    tooltip_text = f"Piece: {point.get('piece', 'N/A')[:20]}... " + tooltip_text
             self.active_tooltip = {'text': tooltip_text, 'pos': mouse_pos}
     
     def _draw_histogram(self, rect, data, title):
