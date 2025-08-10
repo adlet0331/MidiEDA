@@ -5,7 +5,7 @@ import numpy as np
 import pretty_midi
 import mir_eval
 import io
-import re  # <-- Regular expression module added
+import re
 from pydub import AudioSegment
 from MidiFeatures import MidiFeatures
 
@@ -13,10 +13,11 @@ from MidiFeatures import MidiFeatures
 # [IMPORTANT] Please modify the paths below to match your environment.
 PIANOVAM_PREDICTED_MIDI_PATH = "/Users/simhyeongju/AVAPT/EDA/_transcribed_MIDI/OnsetsAndFrames_2_5sec/"
 PIANOVAM_GROUNDTRUTH_PATH = "/Users/simhyeongju/AVAPT/data/pianovam/"
+PIANOVAM_PSSCORE_METADATA_FILE = "/Users/simhyeongju/AVAPT/data/pianovam/pianovam_ps.json"
 MIKROKOSMOS_PATH = "/Users/simhyeongju/AVAPT/data/Mikrokosmos-difficulty/midi/"
 # The user must ensure this file exists at the specified path.
 MIKROKOSMOS_METADATA_FILE = '/Users/simhyeongju/AVAPT/data/Mikrokosmos-difficulty/metadata/henle_mikrokosmos.json'
-SCORE_SCALE_CONSTANT = 10
+SCORE_SCALE_CONSTANT = 9
 # -------------------------
 
 
@@ -37,7 +38,10 @@ COLORS = {
     'checkbox_border': (150, 150, 150), 'checkbox_checked': (200, 200, 200),
     'tooltip_bg': (250, 250, 220), 'tooltip_text': (10, 10, 10),
     'popup_overlay': (0, 0, 0, 180),
-    'regression_line': (255, 105, 180)
+    'regression_line': (255, 105, 180),
+    # --- NEW COLORS for Global Correlation Plot ---
+    'pianovam_color': (135, 206, 250),      # Light Sky Blue
+    'mikrokosmos_color': (255, 182, 193),   # Light Pink
 }
 
 # --- Font Settings ---
@@ -64,10 +68,9 @@ class MidiEvaluatorApp:
         self.evaluation_metadata = self._load_evaluation_metadata()
         self.groundtruth_features_metadata = self._load_groundtruth_features_metadata()
         
-        # --- Load Henle scores ---
-        # Placeholder for future PianoVam Henle data, making the structure extensible.
-        self.pianovam_henle_scores = {} 
+        # --- Load Henle & Performance scores ---
         self.mikrokosmos_henle_scores = self._load_json_file(MIKROKOSMOS_METADATA_FILE, "Mikrokosmos Henle Scores")
+        self.pianovam_ps_scores = self._load_json_file(PIANOVAM_PSSCORE_METADATA_FILE, "PianoVam Performance Scores")
 
         self.FILE_COLUMNS = {
             'index': {'label': '#', 'width': 60, 'key': 'index'},
@@ -632,46 +635,62 @@ class MidiEvaluatorApp:
             self._calculate_transcription_correlations()
 
     def _calculate_henle_correlations(self):
-        """Calculates correlations between musical features and Henle difficulty scores for all available datasets."""
-        print("Calculating global feature-score correlations... (Mode: Henle Score)")
+        """Calculates correlations between musical features and performance scores (Henle/PS)."""
+        print("Calculating global feature-score correlations... (Mode: Performance Score)")
         self.global_correlation_data = {}
 
-        # 필요한 데이터가 로드되었는지 확인합니다.
-        if not self.mikrokosmos_henle_scores:
-            print("⚠️ Cannot calculate Henle correlations: Mikrokosmos Henle score metadata not loaded.")
-            return
+        # Check if necessary data is loaded
         if not self.groundtruth_features_metadata:
-            print("⚠️ Cannot calculate Henle correlations: Missing ground truth features metadata.")
+            print("⚠️ Cannot calculate correlations: Missing ground truth features metadata.")
+            return
+        if not self.mikrokosmos_henle_scores and not self.pianovam_ps_scores:
+            print("⚠️ Cannot calculate correlations: No performance score data (Henle or PS) loaded.")
             return
 
-        # 분석할 모든 음악적 피처에 대해 반복합니다.
+        # Iterate over all musical features to analyze
         for feature_label, (feature_key, _, _) in self.features_info.items():
             data_points = []
             
-            # --- 1. Mikrokosmos 데이터 처리 ---
-            # Henle 점수 데이터를 기준으로 직접 반복하여 Mikrokosmos 데이터셋을 처리합니다.
-            for piece_num, henle_score in self.mikrokosmos_henle_scores.items():
-                # 피처 파일 키는 곡 번호를 기반으로 생성합니다 (예: "1.mid").
-                feature_file_key = f"{piece_num}.mid"
-                feature_data = self.groundtruth_features_metadata.get(feature_file_key, {})
+            # --- 1. Process Mikrokosmos Data (Henle Scores) ---
+            if self.mikrokosmos_henle_scores:
+                for piece_num, henle_score in self.mikrokosmos_henle_scores.items():
+                    feature_file_key = f"{piece_num}.mid"
+                    feature_data = self.groundtruth_features_metadata.get(feature_file_key, {})
 
-                if feature_data.get('available'):
-                    feature_value = feature_data.get('numeric_features', {}).get(feature_key)
-                    if feature_value is not None:
-                        data_points.append({
-                            'feature': feature_value,
-                            'henle': henle_score,
-                            'piece': f"Mikrokosmos No. {piece_num}",
-                        })
+                    if feature_data.get('available'):
+                        feature_value = feature_data.get('numeric_features', {}).get(feature_key)
+                        if feature_value is not None:
+                            data_points.append({
+                                'feature': feature_value,
+                                'henle': henle_score, # Use 'henle' key for consistency
+                                'piece': f"Mikrokosmos No. {piece_num}",
+                                'source': 'mikrokosmos' # Add source identifier
+                            })
 
-            # --- 2. (향후 확장용) PianoVam 데이터 처리 ---
-            # 이 블록은 나중에 PianoVam Henle 점수 데이터가 추가될 경우를 대비한 것입니다.
-            if self.pianovam_henle_scores:
-                # for file_info in self.audio_folders_data: # self.audio_folders_data는 PianoVam 연주 목록입니다.
-                #     # ... 향후 PianoVam Henle 점수 조회 및 데이터 포인트 추가 로직 ...
-                pass
+            # --- 2. Process PianoVam Data (Performance Scores) ---
+            if self.pianovam_ps_scores and self.audio_folders_data:
+                for file_info in self.audio_folders_data:
+                    record_time_full = file_info['name'].replace('_16020Hz', '')
 
-            # --- 3. 현재 피처에 대한 상관관계 계산 ---
+                    # Look up the score data using the date key
+                    if record_time_full in self.pianovam_ps_scores and "ps_score" in self.pianovam_ps_scores[record_time_full]:
+                        ps_score = self.pianovam_ps_scores[record_time_full]["ps_score"]
+
+                        # Look up the ground truth feature data
+                        feature_file_key = f"{record_time_full}.mid"
+                        feature_data = self.groundtruth_features_metadata.get(feature_file_key, {})
+                        
+                        if feature_data.get('available'):
+                            feature_value = feature_data.get('numeric_features', {}).get(feature_key)
+                            if feature_value is not None:
+                                data_points.append({
+                                    'feature': feature_value,
+                                    'henle': ps_score, # Use 'henle' key for consistency
+                                    'piece': file_info.get('piece', 'N/A'),
+                                    'source': 'pianovam' # Add source identifier
+                                })
+
+            # --- 3. Calculate Correlation for the current feature ---
             if len(data_points) >= 2:
                 correlations = {}
                 feature_values = np.array([d['feature'] for d in data_points])
@@ -690,7 +709,7 @@ class MidiEvaluatorApp:
         
         if not self.selected_global_correlation_feature and self.global_correlation_data:
             self.selected_global_correlation_feature = next(iter(self.global_correlation_data.keys()))
-        print("✅ Global Henle correlation calculation complete.")
+        print("✅ Global performance score correlation calculation complete.")
 
     def _calculate_transcription_correlations(self):
         """Calculates correlations between musical features and transcription accuracy scores."""
@@ -1104,7 +1123,7 @@ class MidiEvaluatorApp:
             mode_width = 250
             mode_button_x = back_button_rect.left - (mode_width + 10)
             
-            button_text = f"Transcription Score" if self.current_mode == 'Transcription' else f"Henle Score"
+            button_text = f"Transcription Score" if self.current_mode == 'Transcription' else f"Performance Score"
             
             mode_rect = pygame.Rect(mode_button_x, back_button_rect.y, mode_width, 40)
             color = COLORS['button_hover'] if mode_rect.collidepoint(mouse_pos) else COLORS['button']
@@ -1147,7 +1166,7 @@ class MidiEvaluatorApp:
 
         # --- NEW: Dynamically draw score metric buttons based on mode ---
         if is_global and self.current_mode == 'Human Playing':
-            label_text = "Score: Henle Difficulty"
+            label_text = "Score: Performance Score"
             text_surf = FONT_SMALL.render(label_text, True, COLORS['text'])
             text_rect = text_surf.get_rect(left=btn_x, centery=btn_y + 35 / 2)
             screen.blit(text_surf, text_rect)
@@ -1188,8 +1207,8 @@ class MidiEvaluatorApp:
             
     def _draw_scatter_plot(self, rect, f_vals, s_vals, points, is_global, metric, feature_label, corr_value):
         mouse_pos = pygame.mouse.get_pos()
-        # --- NEW: Add Henle Score to map ---
-        score_label_map = {"f1": "F1-Score", "p": "Precision", "r": "Recall", "henle": "Henle Score"}
+        is_performance_score_mode = is_global and self.current_mode == 'Human Playing'
+        score_label_map = {"f1": "F1-Score", "p": "Precision", "r": "Recall", "henle": "Performance Score"}
 
         plot_f_vals = f_vals.copy()
         plot_s_vals = s_vals.copy()
@@ -1219,11 +1238,20 @@ class MidiEvaluatorApp:
         pygame.draw.line(screen, COLORS['grid_line'], plot_origin, (plot_origin[0], plot_origin[1] - plot_h), 2)
         pygame.draw.line(screen, COLORS['grid_line'], plot_origin, (plot_origin[0] + plot_w, plot_origin[1]), 2)
         
+        rendered_y_labels = set()
         for i in range(6):
-            val = min_s + i/5 * s_range; y = plot_origin[1] - ((val - min_s) / s_range) * plot_h
-            if plot_origin[1] - plot_h <= y <= plot_origin[1]:
+            val = min_s + i/5 * s_range
+            y = plot_origin[1] - ((val - min_s) / s_range) * plot_h
+            if plot_origin[1] - plot_h <= y <= plot_origin[1] + 1:
+                if is_performance_score_mode:
+                    label_text = f"{int(round(val))}"
+                    if label_text in rendered_y_labels:
+                        continue
+                    rendered_y_labels.add(label_text)
+                else:
+                    label_text = f"{val:.2f}"
                 pygame.draw.line(screen, COLORS['grid_line'], (plot_origin[0] - 5, y), (plot_origin[0], y), 1)
-                screen.blit(FONT_TINY.render(f"{val:.2f}", True, COLORS['text']), (plot_origin[0] - 45, y - 8))
+                screen.blit(FONT_TINY.render(label_text, True, COLORS['text']), (plot_origin[0] - 45, y - 8))
         
         for i in range(6):
             val = min_f + i/5 * f_range; x = plot_origin[0] + ((val - min_f) / f_range) * plot_w
@@ -1237,10 +1265,17 @@ class MidiEvaluatorApp:
             px = plot_origin[0] + ((f_val - min_f) / f_range) * plot_w
             py = plot_origin[1] - ((s_val - min_s) / s_range) * plot_h
             point_rect = pygame.Rect(px - 5, py - 5, 10, 10)
+            
+            color = COLORS['fn_yellow_fill']
+            if is_performance_score_mode:
+                source = point_data.get('source')
+                if source == 'pianovam': color = COLORS['pianovam_color']
+                elif source == 'mikrokosmos': color = COLORS['mikrokosmos_color']
+
             if not hover_info and point_rect.collidepoint(mouse_pos):
-                hover_info = {'point_data': point_data, 'pos': (px, py)}
+                hover_info = {'point_data': point_data, 'pos': (px, py), 'color': color}
             else:
-                pygame.draw.circle(screen, COLORS['fn_yellow_fill'], (int(px), int(py)), 4)
+                pygame.draw.circle(screen, color, (int(px), int(py)), 4)
         
         if self.show_regression_line and len(plot_f_vals) > 1:
             m, b = np.polyfit(plot_f_vals, plot_s_vals, 1)
@@ -1252,12 +1287,13 @@ class MidiEvaluatorApp:
 
         if hover_info:
             px, py = hover_info['pos']; point = hover_info['point_data']
-            pygame.draw.circle(screen, COLORS['tp_green'], (int(px), int(py)), 7)
+            hover_color = hover_info['color']
+            pygame.draw.circle(screen, (255, 255, 255), (int(px), int(py)), 7)
+            pygame.draw.circle(screen, hover_color, (int(px), int(py)), 5)
             
             score_label = score_label_map.get(metric, metric.upper())
-            # --- NEW: Tooltip logic for both modes ---
             if metric == 'henle':
-                tooltip_text = f"Feat: {point['feature']:.2f}, Henle: {point['henle']}"
+                tooltip_text = f"Feat: {point['feature']:.2f}, Score: {point['henle']}"
                 if is_global:
                     tooltip_text = f"Piece: {point.get('piece', 'N/A')[:20]}... " + tooltip_text
             else: # Transcription scores
@@ -1268,7 +1304,18 @@ class MidiEvaluatorApp:
                 else:
                     tooltip_text = f"Piece: {point.get('piece', 'N/A')[:20]}... " + tooltip_text
             self.active_tooltip = {'text': tooltip_text, 'pos': mouse_pos}
-    
+
+        if is_performance_score_mode:
+            legend_x = rect.right - 180
+            legend_y = rect.top + 20
+            
+            pygame.draw.rect(screen, COLORS['pianovam_color'], (legend_x, legend_y - 5, 10, 10), border_radius=2)
+            screen.blit(FONT_TINY.render("Pianovam", True, COLORS['text']), (legend_x + 20, legend_y - 8))
+            
+            legend_y += 25
+            pygame.draw.rect(screen, COLORS['mikrokosmos_color'], (legend_x, legend_y - 5, 10, 10), border_radius=2)
+            screen.blit(FONT_TINY.render("Mikrokosmos", True, COLORS['text']), (legend_x + 20, legend_y - 8))
+
     def _draw_histogram(self, rect, data, title):
         if len(data) == 0:
             no_points_surf = FONT_MAIN.render("No data for histogram.", True, COLORS['text']); screen.blit(no_points_surf, no_points_surf.get_rect(center=rect.center)); return
