@@ -8,6 +8,7 @@ import io
 import re
 from pydub import AudioSegment
 from MidiFeatures import MidiFeatures
+from scipy import stats
 
 # --- User Settings ---
 # [IMPORTANT] Please modify the paths below to match your environment.
@@ -620,6 +621,19 @@ class MidiEvaluatorApp:
                     corr_matrix = np.corrcoef(feature_values, score_values)
                     corr_coeff = corr_matrix[0, 1]
                 correlations[metric] = corr_coeff if not np.isnan(corr_coeff) else 0.0
+            
+            # --- ADDED FOR KENDALL TAU ---
+            for metric in ['p', 'r', 'f1']:
+                score_values = np.array([d[metric] for d in data_points])
+                kendall_coeff = 0.0
+                if len(feature_values) > 1 and len(score_values) > 1 and np.std(feature_values) > 0 and np.std(score_values) > 0:
+                    try:
+                        tau, _ = stats.kendalltau(feature_values, score_values)
+                        kendall_coeff = tau if not np.isnan(tau) else 0.0
+                    except Exception:
+                        kendall_coeff = 0.0
+                correlations[f'kendall_{metric}'] = kendall_coeff
+            # --- END ---
 
             self.correlation_data[feature_key] = {'label': feature_label, 'correlations': correlations, 'points': data_points}
         
@@ -702,6 +716,17 @@ class MidiEvaluatorApp:
                     corr_matrix = np.corrcoef(feature_values, score_values)
                     corr_coeff = corr_matrix[0, 1]
                 correlations['henle'] = corr_coeff if not np.isnan(corr_coeff) else 0.0
+                
+                # --- ADDED FOR KENDALL TAU ---
+                kendall_coeff = 0.0
+                if len(feature_values) > 1 and len(score_values) > 1 and np.std(feature_values) > 0 and np.std(score_values) > 0:
+                    try:
+                        tau, _ = stats.kendalltau(feature_values, score_values)
+                        kendall_coeff = tau if not np.isnan(tau) else 0.0
+                    except Exception:
+                        kendall_coeff = 0.0
+                correlations['kendall_henle'] = kendall_coeff
+                # --- END ---
 
                 self.global_correlation_data[feature_key] = {
                     'label': feature_label, 'correlations': correlations, 'points': data_points
@@ -763,6 +788,19 @@ class MidiEvaluatorApp:
                     corr_matrix = np.corrcoef(feature_values, score_values)
                     corr_coeff = corr_matrix[0, 1]
                 correlations[metric] = corr_coeff if not np.isnan(corr_coeff) else 0.0
+
+            # --- ADDED FOR KENDALL TAU ---
+            for metric in ['p', 'r', 'f1']:
+                score_values = np.array([d[metric] for d in data_points])
+                kendall_coeff = 0.0
+                if len(feature_values) > 1 and len(score_values) > 1 and np.std(feature_values) > 0 and np.std(score_values) > 0:
+                    try:
+                        tau, _ = stats.kendalltau(feature_values, score_values)
+                        kendall_coeff = tau if not np.isnan(tau) else 0.0
+                    except Exception:
+                        kendall_coeff = 0.0
+                correlations[f'kendall_{metric}'] = kendall_coeff
+            # --- END ---
 
             self.global_correlation_data[feature_key] = {
                 'label': feature_label, 'correlations': correlations, 'points': data_points
@@ -1199,13 +1237,16 @@ class MidiEvaluatorApp:
         plot_score_values = np.array([p[score_key] for p in points])
 
         if self.correlation_plot_type == 'scatter':
-            self._draw_scatter_plot(PLOT_AREA_RECT, plot_feature_values, plot_score_values, points, is_global, selected_metric, feature_data['label'], feature_data['correlations'][selected_metric])
+            pearson_corr = feature_data['correlations'][selected_metric]
+            kendall_key = f'kendall_{selected_metric}'
+            kendall_corr = feature_data['correlations'].get(kendall_key, 0.0)
+            self._draw_scatter_plot(PLOT_AREA_RECT, plot_feature_values, plot_score_values, points, is_global, selected_metric, feature_data['label'], pearson_corr, kendall_corr)
         else:
             data_to_plot = plot_feature_values if self.correlation_plot_type == 'hist_feature' else plot_score_values
             title = f"{feature_data['label']} Distribution" if self.correlation_plot_type == 'hist_feature' else f"Score ({selected_metric.upper()}) Distribution"
             self._draw_histogram(PLOT_AREA_RECT, data_to_plot, title)
             
-    def _draw_scatter_plot(self, rect, f_vals, s_vals, points, is_global, metric, feature_label, corr_value):
+    def _draw_scatter_plot(self, rect, f_vals, s_vals, points, is_global, metric, feature_label, corr_value, kendall_corr_value):
         mouse_pos = pygame.mouse.get_pos()
         is_performance_score_mode = is_global and self.current_mode == 'Human Playing'
         score_label_map = {"f1": "F1-Score", "p": "Precision", "r": "Recall", "henle": "Performance Score"}
@@ -1234,6 +1275,13 @@ class MidiEvaluatorApp:
 
         AXIS_PADDING = 50; plot_w, plot_h = rect.width - AXIS_PADDING*1.5, rect.height - AXIS_PADDING*1.5
         plot_origin = (rect.left + AXIS_PADDING, rect.bottom - AXIS_PADDING)
+
+        # --- ADDED: Display Correlation Coefficients ---
+        corr_text = f"Pearson's r: {corr_value:.3f}    Kendall's τ: {kendall_corr_value:.3f}"
+        corr_surf = FONT_SMALL.render(corr_text, True, COLORS['text'])
+        corr_rect = corr_surf.get_rect(right=rect.right - 300, top=rect.top + 15)
+        screen.blit(corr_surf, corr_rect)
+        # --- END ---
 
         pygame.draw.line(screen, COLORS['grid_line'], plot_origin, (plot_origin[0], plot_origin[1] - plot_h), 2)
         pygame.draw.line(screen, COLORS['grid_line'], plot_origin, (plot_origin[0] + plot_w, plot_origin[1]), 2)
