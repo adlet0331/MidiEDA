@@ -31,6 +31,8 @@ AUDIO_TRANSCRIBE_OUTPUT_FOLDER = '/Users/simhyeongju/AVAPT/EDA/_transcribed_MIDI
 AUDIO_TRANSCRIBE_BATCH_SIZE = 24
 AUDIO_TRANSCRIBE_SEGMENT_LENGTH_SEC = 5
 
+SEGMENT_LEN_SEC = 5
+
 PREDICTED_FOLDER = "/Users/simhyeongju/AVAPT/EDA/_transcribed_MIDI/OnsetsAndFrames_2_5sec"
 
 SF2_PATH = '/Users/simhyeongju/AVAPT/EDA/FluidR3_GM.sf2'

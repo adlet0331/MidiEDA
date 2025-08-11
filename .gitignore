@@ -1,3 +1,4 @@
 **/
-
+!model/
+!onsets_and_frames/
 *.sf2
