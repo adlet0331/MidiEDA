@@ -1,7 +1,9 @@
 import numpy as np
 import pretty_midi
-import os
+pretty_midi.pretty_midi.MAX_TICK = 1.1e9 # pretty_midi의 MAX_TICK 값을 늘려서 MIDI 파일의 최대 tick 수를 증가시킴
+import os, io
 from midi import load_midi, slice_midi, notes_to_piano_roll
+import music21  # .xml 처리를 위해 music21 라이브러리 추가
 
 """
 Basic MIDI feature extraction class.
@@ -14,12 +16,37 @@ class MidiFeatures:
             print(f"MIDI file not found: {midi_path}")
             self.available = False
             return
+            
         self.midi_path = midi_path
-        self.midi = pretty_midi.PrettyMIDI(midi_path)
+        # 파일 확장자 확인
+        file_extension = os.path.splitext(self.midi_path)[1].lower()
+
+        try:
+            # 확장자에 따라 다른 방식으로 파일 로드
+            if file_extension in ['.mid', '.midi']:
+                self.midi = pretty_midi.PrettyMIDI(self.midi_path)
+            elif file_extension in ['.xml', '.musicxml']:
+                # music21을 사용해 .xml 파일 로드 후 pretty_midi 객체로 변환
+                score = music21.converter.parse(self.midi_path)
+                midi_file_obj = score.write('midi')
+                with open(midi_file_obj, 'rb') as f:
+                    midi_data = io.BytesIO(f.read())
+                self.midi = pretty_midi.PrettyMIDI(midi_data)
+            else:
+                print(f"Unsupported file format: {file_extension}. Please use .mid or .xml.")
+                self.available = False
+                return
+
+        except Exception as e:
+            print(f"Error processing file {self.midi_path}: {e}")
+            self.available = False
+            return
+
         if self.midi.instruments is None or len(self.midi.instruments) == 0:
             print("MIDI file does not contain any instruments or notes.")
             self.available = False
             return
+            
         self.notes = self.midi.instruments[0].notes if len(self.midi.instruments) > 0 else []
         self.extract_features(self.notes, midi=self.midi)
 
@@ -96,7 +123,7 @@ class MidiFeatures:
         total_duration = self.midi.get_end_time()
         num_segments = int(np.ceil(total_duration / segment_length_sec))
 
-        midi = load_midi(self.midi_path)
+        midi = self.midi.instruments[0].notes if len(self.midi.instruments) > 0 else []
         intervals = midi[:, :2]
         pitches = midi[:, 2]
         velocities = midi[:, 3]
@@ -134,6 +161,6 @@ class MidiFeatures:
         if not self.available:
             return "MIDI features are not available due to missing or invalid MIDI file."
         info = "MIDI Features:\n"
-        for key, value in self.iterable_features.items():
-            info += f"  {key}: {value}\n"
+        for key, value in self.numeric_features.items(): # iterable_features는 너무 길 수 있으므로 numeric_features로 변경
+            info += f"  {key}: {value:.4f}\n"
         return info

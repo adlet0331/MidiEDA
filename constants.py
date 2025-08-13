@@ -15,17 +15,20 @@ MEL_FMIN = 30
 MEL_FMAX = SAMPLE_RATE // 2 # 8010
 WINDOW_LENGTH = round(HOP_LENGTH * 4) # 2136
 
+RANDOM_SEED = 42
+TRAIN_TEST_VAL_SPLIT = [0.8, 0.1, 0.1]
 
-import torch
-DEFAULT_DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+CIPI_PATH = '/Users/simhyeongju/AVAPT/data/CIPI/'
+CIPI_METADATA_FILE = '/Users/simhyeongju/AVAPT/data/CIPI/index.json'
+
+MIKROKOSMOS_PATH = '/Users/simhyeongju/AVAPT/data/Mikrokosmos-difficulty/'
+MIKROKOSMOS_MIDI_FOLDER = '/Users/simhyeongju/AVAPT/data/Mikrokosmos-difficulty/midi/'
+MIKROKOSMOS_METADATA_FILE = '/Users/simhyeongju/AVAPT/data/Mikrokosmos-difficulty/metadata/henle_mikrokosmos.json'
 
 MODEL_SAVE_PATH = "/Users/simhyeongju/AVAPT/EDA/pretrained_model/best_model-53900step-valLoss0.053890.pt"
 
 PIANOVAM_AUDIO_INPUT_FOLDER = '/Users/simhyeongju/AVAPT/data/pianovam/audio/'
 PIANOVAM_GROUND_TRUTH_FOLDER = '/Users/simhyeongju/AVAPT/data/pianovam/midi/'
-
-MIKROKOSMOS_MIDI_FOLDER = '/Users/simhyeongju/AVAPT/data/Mikrokosmos-difficulty/midi/'
-MIKROKOSMOS_METADATA_FILE = '/Users/simhyeongju/AVAPT/data/Mikrokosmos-difficulty/metadata/henle_mikrokosmos.json'
 
 AUDIO_TRANSCRIBE_OUTPUT_FOLDER = '/Users/simhyeongju/AVAPT/EDA/_transcribed_MIDI/'
 AUDIO_TRANSCRIBE_BATCH_SIZE = 24
@@ -36,3 +39,6 @@ SEGMENT_LEN_SEC = 5
 PREDICTED_FOLDER = "/Users/simhyeongju/AVAPT/EDA/_transcribed_MIDI/OnsetsAndFrames_2_5sec"
 
 SF2_PATH = '/Users/simhyeongju/AVAPT/EDA/FluidR3_GM.sf2'
+
+import torch
+DEFAULT_DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
