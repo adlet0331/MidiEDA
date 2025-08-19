@@ -17,6 +17,9 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import random_split, ConcatDataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
+from sklearn.metrics import balanced_accuracy_score
+from statistics import mean, stdev
+
 from model import *
 
 @ex.config
@@ -24,9 +27,8 @@ def my_config():
     # runs/p-est-250309-211211
     logdir = 'runs/p-est-' + datetime.now().strftime('%y%m%d-%H%M%S')
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    iterations = 10000
+    iterations = 100000
     batch_size = 32
-    resume_iteration = None
 
     learning_rate = 1e-2
     learning_rate_decay_steps = 1000
@@ -40,24 +42,25 @@ def my_config():
     numeric_features = 14  # Mikrokosmos의 Numeric Features 수
 
     seed = 42
-    save_log = False  # 로그 저장 여부
+    save_log = True  # 로그 저장 여부
     ex.observers.append(FileStorageObserver(logdir))
 
 @ex.automain
-def train(logdir, numeric_features, numeric_versions, device, iterations, batch_size, resume_iteration, 
+def train(logdir, numeric_features, numeric_versions, device, iterations, batch_size, 
           learning_rate, learning_rate_decay_steps, learning_rate_decay_rate, 
           validation_interval, accumulate_steps, checkpoint_interval, save_log, _seed):
     print_config(ex.current_run)
 
-    os.makedirs(logdir, exist_ok=True)
-    writer = SummaryWriter(logdir)
+    if save_log:
+        os.makedirs(logdir, exist_ok=True)
+        writer = SummaryWriter(logdir)
 
     torch.manual_seed(_seed)
     np.random.seed(_seed)
 
     # 데이터셋 로드
-    mikrokosmos_dataset = MikrokosmosDataset()
-    cipi_dataset = CipiDataset()
+    mikrokosmos_dataset = MikrokosmosDataset(dataset_path=MIKROKOSMOS_PATH, numeric_versions=numeric_versions)
+    cipi_dataset = CipiDataset(dataset_path=CIPI_PATH, numeric_versions=numeric_versions)
 
     combined_dataset = ConcatDataset([mikrokosmos_dataset, cipi_dataset])
     trainset, validset = random_split(
@@ -87,7 +90,6 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
                 "learning_rate": learning_rate,
                 "learning_rate_decay_steps": learning_rate_decay_steps,
                 "batch_size": batch_size,
-                "resume_iteration": resume_iteration,
                 "iterations": iterations,
                 "accumulate_steps": accumulate_steps,
                 "validation_interval": validation_interval,
@@ -97,14 +99,7 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
             }
         )
     
-    # 모델 학습 재개시
-    if resume_iteration is not None:
-        model.load_state_dict(torch.load(
-            os.path.join(logdir, 'model_snapshots', f'model_{resume_iteration//checkpoint_interval}.pt')
-        ))
-    else:
-        os.makedirs(os.path.join(logdir, 'model_snapshots'), exist_ok=True)
-
+    os.makedirs(os.path.join(logdir, 'model_snapshots'), exist_ok=True)
     print(f"학습을 시작합니다. 총 {iterations}번의 반복을 수행합니다.")
 
     best_model_path = None
@@ -139,9 +134,15 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
                 scheduler.step()
 
             if iteration % validation_interval == 0:
-                model.eval()
+                mse_scores = []
+                acc1_scores = []
+                acc3_scores = []
+                acc9_scores = []
                 validation_loss = 0.0
+                
+                # Validation 코드
                 with torch.no_grad():
+                    model.eval()
                     for valid_batch in valid_dataloader:
                         valid_batch_features, valid_batch_labels = valid_batch
                         valid_batch_features = valid_batch_features.to(device, dtype=torch.float32)
@@ -149,8 +150,19 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
                             torch.arange(1, 10, device=device)[None, :] <= valid_batch_labels[:, None]
                         ).to(torch.float32)
                         valid_predictions = model(valid_batch_features)
-                        validation_loss += loss_function(valid_predictions, valid_batch_labels).sum()
-                validation_loss /= len(valid_dataloader)
+                        inference = inference_from_pred(valid_predictions)
+                        valid_batch_labels = inference_from_pred(valid_batch_labels)
+
+                        acc1_scores.append(get_acc1_macro(y_true=valid_batch_labels, y_pred=inference))
+                        mse_scores.append(get_mse_macro(y_true=valid_batch_labels, y_pred=inference))
+
+                        acc3_scores.append(balanced_accuracy_score(y_true=valid_batch_labels, y_pred=inference))
+                        nine2three = [0, 0, 0, 0, 1, 1, 1, 2, 2, 2]
+                        acc9_scores.append(balanced_accuracy_score(y_true=[nine2three[x] for x in valid_batch_labels],
+                                                                    y_pred=[nine2three[x] for x in inference]))
+
+                if mse_scores:
+                    validation_loss = sum(mse_scores) / len(mse_scores)
 
                 if validation_loss < best_validation_loss:
                     best_validation_loss = validation_loss
@@ -159,8 +171,18 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
                     print(f"Best model saved at iteration {iteration} with validation loss {best_validation_loss:.4f}")
 
                 if save_log:
-                    wandb.log({"validation_loss": validation_loss}, step=iteration)
+                    wandb.log({
+                        "validation_loss": validation_loss,
+                        "mse_score": mean(mse_scores),
+                        "acc1_score": mean(acc1_scores),
+                        "acc3_score": mean(acc3_scores),
+                        "acc9_score": mean(acc9_scores)
+                    }, step=iteration)
                     writer.add_scalar('validation_loss', validation_loss, global_step=iteration)
+                    writer.add_scalar('mse_score', mean(mse_scores), global_step=iteration)
+                    writer.add_scalar('acc1_score', mean(acc1_scores), global_step=iteration)
+                    writer.add_scalar('acc3_score', mean(acc3_scores), global_step=iteration)
+                    writer.add_scalar('acc9_score', mean(acc9_scores), global_step=iteration)
 
                 model.train()
 

@@ -37,48 +37,113 @@ class MidiFeaturesPerformanceDataset(Dataset):
     def __init__(self, dataset_path=MIKROKOSMOS_PATH, numeric_versions=1):
         self.dataset_path = dataset_path
         self.numeric_versions = numeric_versions
-        self.features_name = f"features_v{numeric_versions}"  # Numeric Features 버전
+        self.feature_version_filename = f"features_v{numeric_versions}"  # Numeric Features 버전
 
         # 서브클래스가 제공해야 하는 메타데이터 파일 경로
         self.metadata_path = self.get_metadata_path()
+        # 메타데이터 로드
+        self.metadata = self.load_metadata()  # List 형태로 로드
 
-        # 메타데이터 로드(서브클래스 구현)
-        self.metadata = self.load_metadata()  # dictionary 형태로 로드
-        self.size = len(self.metadata)
-
-        # 레이블 캐시
-        self._labels_mem: List[Any] = [self.get_label(i) for i in range(self.size)]
-        # feature 메모리 캐시
-        self._features_mem: List[np.ndarray] = [None] * self.size
-
-        # 이미 저장된 features가 있으면 메모리에 올림
-        have = 0
-        for i, entry in enumerate(self.metadata):
-            if isinstance(entry, dict) and entry.get(self.features_name) is not None:
-                self._features_mem[i] = np.asarray(entry[self.features_name], dtype=np.float32)
-                have += 1
-        self._features_ready = (have == self.size)
-
-        # __init__ 시점에 전량 준비(최초 1회)
-        if not self._features_ready:
-            print(f"Preparing features for {self.size} items in {self.features_name}...")
-            self._prepare_all_features()
+        # Feature 캐시 로드
+        self.cached_feature = self._load_cached_features(self.feature_version_filename)
+        # 완전한 계산된 캐시가 없는 경우, 새로 계산 후 저장해주기
+        if len(self.cached_feature) == 0:
+            print(f"{self.dataset_path} Numeric Features v{numeric_versions}가 캐시되지 않았습니다. 새로 계산합니다.")
+            # str: metadata에서의 key
+            # List[float]: 해당 key의 Numeric Features
+            _features_mem: Dict[str, List[float]] = {}
+            _valid_size: int = 0
+            _valid_indices: List[str] = []
+            _skipped = 0
+            _skipped_indices: List[str] = []
+            for i in range(len(self.metadata)):
+                feats = self.compute_features_for_index(i)
+                metadata_i = self.metadata[i]
+                key = metadata_i["key"]
+                if isinstance(feats, np.ndarray):
+                    _features_mem[key] = feats.tolist()
+                    _valid_size += 1
+                    _valid_indices.append({
+                        "key": key,
+                        "index": i
+                    })
+                elif isinstance(feats, Exception):
+                    _skipped += 1
+                    _skipped_indices.append({
+                        "key": key,
+                        "index": i,
+                        "error": str(feats)
+                    })
+                    print(f"Index {i}에서 Numeric Features 계산 실패: {feats}")
+                else:
+                    print(f"Index {i}에서 Numeric Features 계산 결과가 예상과 다릅니다: {feats}")
+            print(f"총 {len(self.metadata)}개의 파일 중 {_valid_size}개에서 Numeric Features를 성공적으로 계산했습니다. {_skipped}개는 실패했습니다.")
+            if _valid_size + _skipped != len(self.metadata):
+                raise ValueError(f"경고: 유효한 크기와 스킵된 크기의 합이 전체 크기와 일치하지 않습니다. {len(self.metadata)} != {_valid_size + _skipped}")
+            self.cached_feature["features_mem"] = _features_mem
+            self.cached_feature["valid_size"] = _valid_size
+            self.cached_feature["valid_indices"] = _valid_indices
+            self.cached_feature["skipped_size"] = _skipped
+            self.cached_feature["skipped_indices"] = _skipped_indices
+            self._save_cache_features(self.feature_version_filename)
 
     # ---------- 서브클래스가 구현 ----------
+
     def get_metadata_path(self) -> str:
+        """
+        메타데이터 파일 경로를 반환하는 메소드.
+        """
         raise NotImplementedError
 
-    def load_metadata(self):
+    def load_metadata(self) -> List[Dict[str, Any]]:
+        """
+        메타데이터를 List 형태로 로드하는 메소드.
+        """
         raise NotImplementedError
-
-    def get_piece_path(self, index):
+    
+    def serialize_metadata_for_save(self) -> Dict:
+        """
+        서브클래스에서 포맷에 맞춰 구현.
+        메타데이터를 직렬화하여 저장할 때 사용됩니다.
+        """
         raise NotImplementedError
+    
+    # def get_piece_path(self, index):
+    #     """
+    #     Piece의 경로를 반환하는 메소드. Midi 파일이 하나만 있을 때 사용.
+    #     """
+    #     raise NotImplementedError
+    
+    # def get_piece_paths(self, index):
+    #     """
+    #     Piece의 경로들을 반환하는 메소드. Midi 파일이 2개 이상 있을 때 사용.
+    #     """
+    #     raise NotImplementedError
 
     def get_label(self, index):
+        """
+        Piece의 Label을 반환하는 메소드.
+        """
         raise NotImplementedError
-
+    
     # ---------- 내부 유틸 ----------
-    def _compute_features_for_index(self, index: int) -> np.ndarray:
+    
+    def _load_cached_features(self, filename: str) -> Dict:
+        os.makedirs(os.path.join(self.dataset_path, 'features'), exist_ok=True)
+        cached_features = os.path.join(self.dataset_path, 'features', f"{filename}.json")
+        if os.path.exists(cached_features):
+            with open(cached_features, "r", encoding="utf-8") as f:
+                print("Loading cached features from", cached_features)
+                return json.load(f)
+        return {}
+    
+    def _save_cache_features(self, filename: str):
+        os.makedirs(os.path.join(self.dataset_path, 'features'), exist_ok=True)
+        cached_features_path = os.path.join(self.dataset_path, 'features', f"{filename}.json")
+        _atomic_write_json(cached_features_path, self.cached_feature, indent=2)
+        print(f"Features saved to {cached_features_path}")
+
+    def compute_features_for_index(self, index: int) -> np.ndarray:
         """
         단일 파일 또는 다중 파일(CIPI) 평균.
         CIPI의 경우 개별 파일 실패는 스킵하고, 성공한 것만 평균.
@@ -86,111 +151,43 @@ class MidiFeaturesPerformanceDataset(Dataset):
         """
         if hasattr(self, "get_piece_paths"):
             feats = []
-            last_exc = None
+            last_error = None
             for p in self.get_piece_paths(index):
                 try:
                     feats.append(MidiFeatures(midi_path=p).get_numeric_features())
                 except Exception as e:
-                    last_exc = e
+                    last_error = e
                     continue
             if not feats:
-                raise last_exc or RuntimeError(f"All paths failed for index {index}")
+                print(f"All paths failed for index {index}")
+                return last_error
             return np.mean(np.asarray(feats, dtype=np.float32), axis=0)
-        else:
-            return MidiFeatures(midi_path=self.get_piece_path(index)).get_numeric_features()
-
-    def _set_features_in_metadata(self, index: int, feats_list: List[float]):
-        """
-        self.metadata[index]에 features 필드 주입.
-        Mikrokosmos 구버전(정수만)도 dict로 업그레이드.
-        """
-        entry = self.metadata[index]
-        if isinstance(entry, dict):
-            entry[self.features_name] = feats_list
-        else:
-            # 구버전: int 레이블만 존재 → dict로 업그레이드
-            self.metadata[index] = {"henle": entry, self.features_name: feats_list}
+        elif hasattr(self, "get_piece_path"):
+            try:
+                return np.asarray(MidiFeatures(midi_path=self.get_piece_path(index)).get_numeric_features(), dtype=np.float32)
+            except Exception as e:
+                print(f"Failed to compute features for index {index}: {e}")
+                return e
 
     def _save_metadata(self):
         """현재 self.metadata를 파일 포맷에 맞춰 저장(서브클래스별 직렬화)."""
-        out = self._serialize_metadata_for_save()
+        out = self.serialize_metadata_for_save()
         _atomic_write_json(self.metadata_path, out, indent=2)
-
-    def _serialize_metadata_for_save(self) -> Any:
-        """서브클래스에서 포맷에 맞춰 구현."""
-        raise NotImplementedError
-
-    def _prepare_all_features(self):
-        """
-        features가 비어있는 항목을 계산하여 메타데이터에 저장하고,
-        학습 시 사용할 유효 인덱스를 구성.
-        """
-        updated = False
-        invalid = []
-        for i in range(self.size):
-            if self._features_mem[i] is not None:
-                continue
-            try:
-                feats = self._compute_features_for_index(i)
-                feats = np.asarray(feats, dtype=np.float32)
-                self._features_mem[i] = feats
-                self._set_features_in_metadata(i, feats.tolist())
-                updated = True
-            except Exception as e:
-                # 실패 샘플은 features=None로 표기, error 메시지 기록
-                entry = self.metadata[i]
-                if not isinstance(entry, dict):
-                    entry = {"henle": entry}
-                entry[self.features_name] = None
-                entry["error"] = str(e)
-                self.metadata[i] = entry
-                invalid.append(i)
-                updated = True
-                continue
-
-        if updated:
-            self._save_metadata()
-
-        # 학습에는 features가 있는 인덱스만 사용
-        self.valid_indices = [i for i in range(self.size) if self.metadata[i].get(self.features_name) is not None]
-        self._features_ready = True
 
     # ---------- 표준 Dataset API ----------
     def __len__(self):
-        if hasattr(self, "valid_indices"):
-            return len(self.valid_indices)
-        return self.size
+        return self.cached_feature["valid_size"]
 
     def __getitem__(self, index):
-        # (방어) 혹시 __init__에서 못했으면 첫 호출 때 보장
-        if not self._features_ready:
-            self._prepare_all_features()
+        if index >= self.cached_feature["valid_size"]:
+            raise IndexError("Index out of bounds for dataset size.")
 
-        if hasattr(self, "valid_indices"):
-            if index >= len(self.valid_indices):
-                raise IndexError("Index out of range")
-            real_idx = self.valid_indices[index]
-        else:
-            if index >= self.size:
-                raise IndexError("Index out of range")
-            real_idx = index
-
-        feats = self._features_mem[real_idx]
-        if feats is None:
-            # 유효 인덱스인데도 비어있으면 재계산 + 저장
-            feats = np.asarray(self._compute_features_for_index(real_idx), dtype=np.float32)
-            self._features_mem[real_idx] = feats
-            self._set_features_in_metadata(real_idx, feats.tolist())
-            self._save_metadata()
-
-        label = self._labels_mem[real_idx]
-        return torch.from_numpy(feats), torch.tensor(label)
+        feats = self.cached_feature["features_mem"][self.cached_feature["valid_indices"][index]["key"]]
+        label = self.metadata[self.cached_feature["valid_indices"][index]["index"]]["henle"]
+        return torch.tensor(feats), torch.tensor(label)
 
 
 class MikrokosmosDataset(MidiFeaturesPerformanceDataset):
-    def __init__(self, dataset_path=MIKROKOSMOS_PATH, numeric_versions=1):
-        super().__init__(dataset_path=dataset_path, numeric_versions=numeric_versions)
-
     def get_metadata_path(self) -> str:
         return os.path.join(self.dataset_path, 'metadata', 'henle_mikrokosmos.json')
 
@@ -203,23 +200,19 @@ class MikrokosmosDataset(MidiFeaturesPerformanceDataset):
         # 키를 1..N 정렬하여 리스트화
         for k in sorted(raw.keys(), key=lambda x: int(x)):
             v = raw[k]
-            if isinstance(v, dict):
-                v["filename"] = f"{k}.xml"  # Mikrokosmos는 파일 이름이 1.xml, 2.xml, ...
-                items.append(v)                # {"henle":..., self.features_name:...}
-            else:
-                items.append({
-                    "filename": f"{k}.xml",
-                    "henle": v,
-                })     # 구버전 → dict 업그레이드
+            items.append({
+                "filename": f"{k}.xml",
+                "henle": v,
+                "key": k,
+            })     # 구버전 → dict 업그레이드
         return items
 
-    def _serialize_metadata_for_save(self) -> Any:
-        # 파일에는 다시 "1","2",... 키로 저장
+    def serialize_metadata_for_save(self) -> Any:
         out = {}
         for i, entry in enumerate(self.metadata, start=1):
             out[str(i)] = {
                 "henle": entry["henle"],
-                self.features_name: entry.get(self.features_name)
+                self.feature_version_filename: entry.get(self.feature_version_filename)
             }
             # 실패 로그가 있다면 유지(선택)
             if "error" in entry:
@@ -235,9 +228,6 @@ class MikrokosmosDataset(MidiFeaturesPerformanceDataset):
 
 
 class CipiDataset(MidiFeaturesPerformanceDataset):
-    def __init__(self, dataset_path=CIPI_PATH, numeric_versions=1):
-        super().__init__(dataset_path=dataset_path, numeric_versions=numeric_versions)
-
     def get_metadata_path(self) -> str:
         return os.path.join(self.dataset_path, 'index.json')
 
@@ -245,11 +235,15 @@ class CipiDataset(MidiFeaturesPerformanceDataset):
         path = self.get_metadata_path()
         with open(path, 'r', encoding='utf-8') as f:
             raw = json.load(f)  # 일반적으로 dict
+        items = []
+        # 키를 1..N 정렬하여 리스트화
+        for k in sorted(raw.keys(), key=lambda x: str(x)):
+            raw[k]['key'] = k  # 키를 추가하여 원본 키 유지
+            items.append(raw[k])
         # values()를 사용하던 기존 코드와 호환: 리스트로 변환
-        items = list(raw.values()) if isinstance(raw, dict) else list(raw)
         return items
 
-    def _serialize_metadata_for_save(self) -> Any:
+    def serialize_metadata_for_save(self) -> Any:
         # 간단히 0..N-1 키로 저장(기존 코드가 values()만 사용하므로 호환)
         out = {}
         for i, entry in enumerate(self.metadata):
@@ -265,26 +259,3 @@ class CipiDataset(MidiFeaturesPerformanceDataset):
         for _, path in sorted(self.metadata[index]['path'].items()):
             paths.append(os.path.join(self.dataset_path, 'scores', path))
         return paths
-
-    def __getitem__(self, index):
-        # CIPI는 다중 경로 평균이므로 오버라이드 유지
-        if not self._features_ready:
-            self._prepare_all_features()
-
-        if hasattr(self, "valid_indices"):
-            if index >= len(self.valid_indices):
-                raise IndexError("Index out of range")
-            real_idx = self.valid_indices[index]
-        else:
-            if index >= self.size:
-                raise IndexError("Index out of range")
-            real_idx = index
-
-        feats = self._features_mem[real_idx]
-        if feats is None:
-            feats = np.asarray(self._compute_features_for_index(real_idx), dtype=np.float32)
-            self._features_mem[real_idx] = feats
-            self._set_features_in_metadata(real_idx, feats.tolist())
-            self._save_metadata()
-
-        return torch.from_numpy(feats), torch.tensor(self.get_label(real_idx))
