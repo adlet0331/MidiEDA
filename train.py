@@ -18,6 +18,8 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import random_split, ConcatDataset, DataLoader
 
 from sklearn.metrics import balanced_accuracy_score
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 from statistics import mean, stdev
 
 from model import *
@@ -41,7 +43,7 @@ def my_config():
     numeric_versions = 1 # Numeric Features 버전, 버전별로 metadata에 저장
     numeric_features = 14  # Mikrokosmos의 Numeric Features 수
 
-    seed = 42
+    seed = 4223
     save_log = True  # 로그 저장 여부
     ex.observers.append(FileStorageObserver(logdir))
 

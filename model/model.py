@@ -1,5 +1,6 @@
 # https://github.com/PRamoneda/rubricnet/blob/master/rubricnet/rubricnet.py
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -60,5 +61,12 @@ class RubricNet(nn.Module):
         probabilities = self.sigmoid(logits)  # Sigmoid 활성화 함수 적용
         return probabilities
     
+    def get_descriptive_scores(self, x):
+        if x.ndim == 1:
+            x = x.unsqueeze(0)
+        x = (x - self.scaler_means) / self.scaler_stds
+        scores = [torch.tanh(layer(x[:, idx].unsqueeze(-1))).detach().numpy() for idx, layer in enumerate(self.descriptor_layers)]
+        return scores
+
     def get_scaler_infos(self):
         return self.scaler_means, self.scaler_stds
