@@ -38,6 +38,7 @@ class MidiFeaturesPerformanceDataset(Dataset):
         self.dataset_path = dataset_path
         self.numeric_versions = numeric_versions
         self.feature_version_filename = f"features_v{numeric_versions}"  # Numeric Features 버전
+        self.features_names = None
 
         # 서브클래스가 제공해야 하는 메타데이터 파일 경로
         self.metadata_path = self.get_metadata_path()
@@ -67,7 +68,7 @@ class MidiFeaturesPerformanceDataset(Dataset):
                         "key": key,
                         "index": i
                     })
-                elif isinstance(feats, Exception):
+                elif isinstance(feats, Exception) or True:
                     _skipped += 1
                     _skipped_indices.append({
                         "key": key,
@@ -75,18 +76,21 @@ class MidiFeaturesPerformanceDataset(Dataset):
                         "error": str(feats)
                     })
                     print(f"Index {i}에서 Numeric Features 계산 실패: {feats}")
-                else:
-                    print(f"Index {i}에서 Numeric Features 계산 결과가 예상과 다릅니다: {feats}")
             print(f"총 {len(self.metadata)}개의 파일 중 {_valid_size}개에서 Numeric Features를 성공적으로 계산했습니다. {_skipped}개는 실패했습니다.")
             if _valid_size + _skipped != len(self.metadata):
                 raise ValueError(f"경고: 유효한 크기와 스킵된 크기의 합이 전체 크기와 일치하지 않습니다. {len(self.metadata)} != {_valid_size + _skipped}")
-            self.cached_feature["features_mem"] = _features_mem
+            self.cached_feature["version"] = numeric_versions
             self.cached_feature["valid_size"] = _valid_size
-            self.cached_feature["valid_indices"] = _valid_indices
             self.cached_feature["skipped_size"] = _skipped
+            self.cached_feature["valid_indices"] = _valid_indices
             self.cached_feature["skipped_indices"] = _skipped_indices
+            self.cached_feature["features_names"] = self.features_names
+            self.cached_feature["features_mem"] = _features_mem
             self._save_cache_features(self.feature_version_filename)
-
+        else:
+            print(f"{self.dataset_path} Numeric Features v{numeric_versions}가 캐시에서 로드되었습니다.")
+            if self.features_names is None:
+                self.features_names = self.cached_feature["features_names"]
     # ---------- 서브클래스가 구현 ----------
 
     def get_metadata_path(self) -> str:
@@ -154,7 +158,11 @@ class MidiFeaturesPerformanceDataset(Dataset):
             last_error = None
             for p in self.get_piece_paths(index):
                 try:
-                    feats.append(MidiFeatures(midi_path=p).get_numeric_features())
+                    midiFeatures = MidiFeatures(midi_path=p)
+                    if self.features_names is None:
+                        self.features_names = midiFeatures.get_numeric_features_names()
+                        print(f"Features names: {self.features_names}")
+                    feats.append(midiFeatures.get_numeric_features())
                 except Exception as e:
                     last_error = e
                     continue
@@ -164,7 +172,11 @@ class MidiFeaturesPerformanceDataset(Dataset):
             return np.mean(np.asarray(feats, dtype=np.float32), axis=0)
         elif hasattr(self, "get_piece_path"):
             try:
-                return np.asarray(MidiFeatures(midi_path=self.get_piece_path(index)).get_numeric_features(), dtype=np.float32)
+                midiFeatures = MidiFeatures(midi_path=self.get_piece_path(index))
+                if self.features_names is None:
+                    self.features_names = midiFeatures.get_numeric_features_names()
+                    print(f"Features names: {self.features_names}")
+                return np.asarray(midiFeatures.get_numeric_features(), dtype=np.float32)
             except Exception as e:
                 print(f"Failed to compute features for index {index}: {e}")
                 return e

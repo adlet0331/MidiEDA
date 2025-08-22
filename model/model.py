@@ -9,15 +9,20 @@ class RubricNet(nn.Module):
     "Towards Explainable and Interpretable Musical Difficulty Estimation: 
     A parameter-efficient approach" 논문에 제안된 RubricNet 모델의 PyTorch 구현.
     """
-    def __init__(self, num_features=18, performance_top=9, threshold=0.5, dropout_rate=0.5):
+    def __init__(self, num_features=14, scaler_parameter=None, performance_top=9, threshold=0.5, dropout_rate=0.5):
         """
         모델의 구성 요소를 초기화합니다.
         Args:
             num_features (int): 입력으로 사용될 음악적 특징의 수.
         """
         super(RubricNet, self).__init__()
+        if len(scaler_parameter[0]) != num_features or len(scaler_parameter[1]) != num_features:
+            raise ValueError(f"scaler_parameter의 길이가 num_features와 일치하지 않습니다: {len(scaler_parameter[0])} != {num_features}")
         # num_features: 입력으로 사용될 음악적 특징의 수
         self.num_features = num_features
+        self.register_buffer('scaler_means', torch.tensor(scaler_parameter[0], dtype=torch.float32))
+        self.register_buffer('scaler_stds', torch.tensor(scaler_parameter[1], dtype=torch.float32))
+
         self.performance_top = performance_top
         self.threshold = threshold
         self.dropout_rate = dropout_rate
@@ -35,10 +40,9 @@ class RubricNet(nn.Module):
             out_features=performance_top,
             bias=True,
         )
-        # Sigmoid 활성화 함수
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, x, training=True):
+    def forward(self, x):
         """
         모델의 순전파 연산을 정의합니다.
         Args:
@@ -49,6 +53,7 @@ class RubricNet(nn.Module):
                           크기는 (batch_size, num_features)입니다.
         """
         # (batch_size, num_features) 크기의 입력을 받았다고 가정
+        x = (x - self.scaler_means) / self.scaler_stds
 
         if self.training:
             x = F.dropout(x, p=self.dropout_rate)  # 드롭아웃 적용

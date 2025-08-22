@@ -34,9 +34,9 @@ def my_config():
     learning_rate_decay_steps = 1000
     learning_rate_decay_rate = 0.9
 
-    accumulate_steps = 2  # Gradient Accumulation Steps
-    validation_interval = 100 * accumulate_steps
-    checkpoint_interval = 1000 * accumulate_steps
+    accumulate_steps = 2  # Gradient, Optimizer, Scheduler Accumulation Steps
+    validation_interval = 200 // accumulate_steps
+    checkpoint_interval = 1000
 
     numeric_versions = 1 # Numeric Features 버전, 버전별로 metadata에 저장
     numeric_features = 14  # Mikrokosmos의 Numeric Features 수
@@ -72,14 +72,32 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
     # DataLoader 설정
     train_dataloader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
     valid_dataloader = DataLoader(validset, batch_size=batch_size)
+    
+    features_list = []
+    features_name_list = mikrokosmos_dataset.features_names
+    for batch_features, _ in train_dataloader:
+        features_list.append(batch_features.detach().cpu().numpy())
+    features_list = np.concatenate(features_list, axis=0)
 
-    model = RubricNet(num_features=numeric_features).to(device, dtype=torch.float32)
+    feature_mean_std_list = [[], []]
+    for i in range(numeric_features):
+        feature_list = features_list[:, i].reshape(-1, 1)
+        feature_mean_std_list[0].append(np.mean(feature_list))
+        feature_mean_std_list[1].append(np.std(feature_list))
+        print(f"{features_name_list[i]} scaler: {feature_mean_std_list[0][i]}, {feature_mean_std_list[1][i]}")
+
+    model = RubricNet(
+        num_features=numeric_features, 
+        scaler_parameter=feature_mean_std_list,
+        performance_top=9,
+        threshold=0.5,
+        dropout_rate=0.2
+    ).to(device, dtype=torch.float32)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer, step_size=learning_rate_decay_steps, gamma=learning_rate_decay_rate
     )
 
-    # WanDB Logging 예시
     if save_log:
         import wandb
         wandb.init(
@@ -102,15 +120,15 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
     os.makedirs(os.path.join(logdir, 'model_snapshots'), exist_ok=True)
     print(f"학습을 시작합니다. 총 {iterations}번의 반복을 수행합니다.")
 
+    iteration = 0
     best_model_path = None
     best_validation_loss = float('inf')
 
     # model = torch.compile(model)  # PyTorch 2.0 이상에서 사용 가능
     model.train()
     loss_function = BCEWithLogitsLoss()
-    
-    # ====== 학습 루프 (최소 수정: zip 제거, while+for로 반복 유지) ======
-    iteration = (resume_iteration or 0)
+
+    # ====== 학습 루프 시작 ======
     while iteration < iterations:
         for batch_features, batch_labels in train_dataloader:
             iteration += 1
@@ -123,10 +141,9 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
             train_loss = loss_function(predictions, batch_labels)
             train_loss.backward()
 
-            print(f"Iteration {iteration}, Train Loss: {train_loss.item():.4f}, Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
             if save_log:
                 wandb.log({"train_loss": train_loss.item()}, step=iteration)
-                writer.add_scalar('train_loss', train_loss.item(), global_step=iteration)
+                ex.log_scalar('train_loss', train_loss.item(), iteration)
 
             if iteration % accumulate_steps == 0:
                 optimizer.step()
@@ -134,6 +151,7 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
                 scheduler.step()
 
             if iteration % validation_interval == 0:
+                print(f"[[Iteration {iteration}]] Train Loss: {train_loss.item():.4f}, Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
                 mse_scores = []
                 acc1_scores = []
                 acc3_scores = []
@@ -156,13 +174,19 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
                         acc1_scores.append(get_acc1_macro(y_true=valid_batch_labels, y_pred=inference))
                         mse_scores.append(get_mse_macro(y_true=valid_batch_labels, y_pred=inference))
 
-                        acc3_scores.append(balanced_accuracy_score(y_true=valid_batch_labels, y_pred=inference))
+                        acc9_scores.append(balanced_accuracy_score(y_true=valid_batch_labels, y_pred=inference))
                         nine2three = [0, 0, 0, 0, 1, 1, 1, 2, 2, 2]
-                        acc9_scores.append(balanced_accuracy_score(y_true=[nine2three[x] for x in valid_batch_labels],
+                        acc3_scores.append(balanced_accuracy_score(y_true=[nine2three[x] for x in valid_batch_labels],
                                                                     y_pred=[nine2three[x] for x in inference]))
 
                 if mse_scores:
                     validation_loss = sum(mse_scores) / len(mse_scores)
+
+                print(f"""\t Validation Loss: {validation_loss:.4f}
+\t MSE Score: {mean(mse_scores):.4f}
+\t Acc1 Score: {mean(acc1_scores):.4f}
+\t Acc3 Score: {mean(acc3_scores):.4f}
+\t Acc9 Score: {mean(acc9_scores):.4f}""")
 
                 if validation_loss < best_validation_loss:
                     best_validation_loss = validation_loss
@@ -178,11 +202,11 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
                         "acc3_score": mean(acc3_scores),
                         "acc9_score": mean(acc9_scores)
                     }, step=iteration)
-                    writer.add_scalar('validation_loss', validation_loss, global_step=iteration)
-                    writer.add_scalar('mse_score', mean(mse_scores), global_step=iteration)
-                    writer.add_scalar('acc1_score', mean(acc1_scores), global_step=iteration)
-                    writer.add_scalar('acc3_score', mean(acc3_scores), global_step=iteration)
-                    writer.add_scalar('acc9_score', mean(acc9_scores), global_step=iteration)
+                    ex.log_scalar('validation_loss', validation_loss, iteration)
+                    ex.log_scalar('mse_score', mean(mse_scores), iteration)
+                    ex.log_scalar('acc1_score', mean(acc1_scores), iteration)
+                    ex.log_scalar('acc3_score', mean(acc3_scores), iteration)
+                    ex.log_scalar('acc9_score', mean(acc9_scores), iteration)
 
                 model.train()
 
