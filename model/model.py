@@ -43,15 +43,6 @@ class RubricNet(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        """
-        모델의 순전파 연산을 정의합니다.
-        Args:
-            x (torch.Tensor): 모델의 입력 텐서. 
-                               크기는 (batch_size, num_features)여야 합니다.        
-        Returns:
-            torch.Tensor: 각 특징에 대한 최종 난이도 기여도 점수. 
-                          크기는 (batch_size, num_features)입니다.
-        """
         # (batch_size, num_features) 크기의 입력을 받았다고 가정
         x = (x - self.scaler_means) / self.scaler_stds
 
@@ -66,11 +57,6 @@ class RubricNet(nn.Module):
         
         probabilities = self.sigmoid(logits)  # Sigmoid 활성화 함수 적용
         return probabilities
-
-    def get_descriptor_scores(self, descriptors):
-        if self.training:
-            descriptors = F.dropout(descriptors, p=self.dropout)
-        # Process each descriptor through its layer, apply tanh, and scale output
-        scores = [torch.tanh(layer(descriptors[:, idx].unsqueeze(-1))).detach().cpu().squeeze() for idx, layer in
-                  enumerate(self.descriptor_layers)]
-        return scores
+    
+    def get_scaler_infos(self):
+        return self.scaler_means, self.scaler_stds

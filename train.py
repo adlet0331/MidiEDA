@@ -1,6 +1,7 @@
 from datetime import datetime
 import numpy as np
 import os
+import json  # JSON 저장을 위해 추가
 
 from sacred import Experiment
 from sacred.commands import print_config
@@ -15,7 +16,6 @@ from torch.nn import BCEWithLogitsLoss
 from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import random_split, ConcatDataset, DataLoader
-from torch.utils.tensorboard import SummaryWriter
 
 from sklearn.metrics import balanced_accuracy_score
 from statistics import mean, stdev
@@ -53,8 +53,6 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
 
     if save_log:
         os.makedirs(logdir, exist_ok=True)
-        writer = SummaryWriter(logdir)
-
     torch.manual_seed(_seed)
     np.random.seed(_seed)
 
@@ -63,16 +61,32 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
     cipi_dataset = CipiDataset(dataset_path=CIPI_PATH, numeric_versions=numeric_versions)
 
     combined_dataset = ConcatDataset([mikrokosmos_dataset, cipi_dataset])
-    trainset, validset = random_split(
+    trainset, validset, testset = random_split(
         combined_dataset,
-        [int(len(combined_dataset) * 0.8),
+        [int(len(combined_dataset) * 0.6),
+         int(len(combined_dataset) * 0.2),
          len(combined_dataset) - int(len(combined_dataset) * 0.8)]
     )
+
+    # ==================== [추가된 코드 시작] ====================
+    # train/validation set의 인덱스를 json 파일로 저장
+    if save_log:
+        dataset_split_info = {
+            'train': trainset.indices,
+            'validation': validset.indices,
+            'test': testset.indices
+        }
+        split_file_path = os.path.join(logdir, 'dataset_split.json')
+        with open(split_file_path, 'w') as f:
+            json.dump(dataset_split_info, f, indent=4)
+        print(f"Train/validation/test split indices saved to {split_file_path}")
+    # ==================== [추가된 코드 끝] ====================
 
     # DataLoader 설정
     train_dataloader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
     valid_dataloader = DataLoader(validset, batch_size=batch_size)
-    
+    test_dataloader = DataLoader(testset, batch_size=batch_size)
+
     features_list = []
     features_name_list = mikrokosmos_dataset.features_names
     for batch_features, _ in train_dataloader:
@@ -197,16 +211,67 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
                 if save_log:
                     wandb.log({
                         "validation_loss": validation_loss,
-                        "mse_score": mean(mse_scores),
-                        "acc1_score": mean(acc1_scores),
-                        "acc3_score": mean(acc3_scores),
-                        "acc9_score": mean(acc9_scores)
+                        "val_mse_score": mean(mse_scores),
+                        "val_acc1_score": mean(acc1_scores),
+                        "val_acc3_score": mean(acc3_scores),
+                        "val_acc9_score": mean(acc9_scores)
                     }, step=iteration)
                     ex.log_scalar('validation_loss', validation_loss, iteration)
-                    ex.log_scalar('mse_score', mean(mse_scores), iteration)
-                    ex.log_scalar('acc1_score', mean(acc1_scores), iteration)
-                    ex.log_scalar('acc3_score', mean(acc3_scores), iteration)
-                    ex.log_scalar('acc9_score', mean(acc9_scores), iteration)
+                    ex.log_scalar('val_mse_score', mean(mse_scores), iteration)
+                    ex.log_scalar('val_acc1_score', mean(acc1_scores), iteration)
+                    ex.log_scalar('val_acc3_score', mean(acc3_scores), iteration)
+                    ex.log_scalar('val_acc9_score', mean(acc9_scores), iteration)
+
+                # Test 결과 저장
+                mse_scores = []
+                acc1_scores = []
+                acc3_scores = []
+                acc9_scores = []
+                test_loss = 0.0
+
+                # Test 코드
+                with torch.no_grad():
+                    model.eval()
+                    for test_batch in test_dataloader:
+                        test_batch_features, test_batch_labels = test_batch
+                        test_batch_features = test_batch_features.to(device, dtype=torch.float32)
+                        test_batch_labels = (
+                            torch.arange(1, 10, device=device)[None, :] <= test_batch_labels[:, None]
+                        ).to(torch.float32)
+                        test_predictions = model(test_batch_features)
+                        inference = inference_from_pred(test_predictions)
+                        test_batch_labels = inference_from_pred(test_batch_labels)
+
+                        acc1_scores.append(get_acc1_macro(y_true=test_batch_labels, y_pred=inference))
+                        mse_scores.append(get_mse_macro(y_true=test_batch_labels, y_pred=inference))
+
+                        acc9_scores.append(balanced_accuracy_score(y_true=test_batch_labels, y_pred=inference))
+                        nine2three = [0, 0, 0, 0, 1, 1, 1, 2, 2, 2]
+                        acc3_scores.append(balanced_accuracy_score(y_true=[nine2three[x] for x in test_batch_labels],
+                                                                    y_pred=[nine2three[x] for x in inference]))
+
+                if mse_scores:
+                    test_loss = sum(mse_scores) / len(mse_scores)
+
+                print(f"""\t Test Loss: {test_loss:.4f}
+\t MSE Score: {mean(mse_scores):.4f}
+\t Acc1 Score: {mean(acc1_scores):.4f}
+\t Acc3 Score: {mean(acc3_scores):.4f}
+\t Acc9 Score: {mean(acc9_scores):.4f}""")
+
+                if save_log:
+                    wandb.log({
+                        "test_loss": test_loss,
+                        "test_mse_score": mean(mse_scores),
+                        "test_acc1_score": mean(acc1_scores),
+                        "test_acc3_score": mean(acc3_scores),
+                        "test_acc9_score": mean(acc9_scores)
+                    }, step=iteration)
+                    ex.log_scalar('test_loss', test_loss, iteration)
+                    ex.log_scalar('test_mse_score', mean(mse_scores), iteration)
+                    ex.log_scalar('test_acc1_score', mean(acc1_scores), iteration)
+                    ex.log_scalar('test_acc3_score', mean(acc3_scores), iteration)
+                    ex.log_scalar('test_acc9_score', mean(acc9_scores), iteration)
 
                 model.train()
 
