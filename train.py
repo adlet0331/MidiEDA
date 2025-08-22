@@ -65,7 +65,7 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
         combined_dataset,
         [int(len(combined_dataset) * 0.6),
          int(len(combined_dataset) * 0.2),
-         len(combined_dataset) - int(len(combined_dataset) * 0.8)]
+         len(combined_dataset) - int(len(combined_dataset) * 0.6) - int(len(combined_dataset) * 0.2)]
     )
 
     # ==================== [추가된 코드 시작] ====================
