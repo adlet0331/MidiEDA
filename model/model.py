@@ -16,12 +16,14 @@ class RubricNet(nn.Module):
             num_features (int): 입력으로 사용될 음악적 특징의 수.
         """
         super(RubricNet, self).__init__()
-        if len(scaler_parameter[0]) != num_features or len(scaler_parameter[1]) != num_features:
-            raise ValueError(f"scaler_parameter의 길이가 num_features와 일치하지 않습니다: {len(scaler_parameter[0])} != {num_features}")
-        # num_features: 입력으로 사용될 음악적 특징의 수
         self.num_features = num_features
-        self.register_buffer('scaler_means', torch.tensor(scaler_parameter[0], dtype=torch.float32))
-        self.register_buffer('scaler_stds', torch.tensor(scaler_parameter[1], dtype=torch.float32))
+        if scaler_parameter is not None and len(scaler_parameter[0]) == num_features and len(scaler_parameter[1]) == num_features:
+            # num_features: 입력으로 사용될 음악적 특징의 수
+            self.register_buffer('scaler_means', torch.tensor(scaler_parameter[0], dtype=torch.float32))
+            self.register_buffer('scaler_stds', torch.tensor(scaler_parameter[1], dtype=torch.float32))
+        else:
+            self.register_buffer('scaler_means', torch.zeros(num_features, dtype=torch.float32))
+            self.register_buffer('scaler_stds', torch.ones(num_features, dtype=torch.float32))
 
         self.performance_top = performance_top
         self.threshold = threshold
