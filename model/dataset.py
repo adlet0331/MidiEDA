@@ -271,3 +271,48 @@ class CipiDataset(MidiFeaturesPerformanceDataset):
         for _, path in sorted(self.metadata[index]['path'].items()):
             paths.append(os.path.join(self.dataset_path, 'scores', path))
         return paths
+
+class AudioTranscriptionDataset(MidiFeaturesPerformanceDataset):
+    def __init__(self, dataset_path='/Users/simhyeongju/AVAPT/EDA/_transcribed_MIDI/OnsetsAndFrames_2_5sec', numeric_versions=1):
+        super().__init__(dataset_path, numeric_versions)
+
+    def get_metadata_path(self) -> str:
+        return os.path.join(self.dataset_path, 'metadata.json')
+
+    def load_metadata(self):
+        path = self.get_metadata_path()
+        with open(path, 'r', encoding='utf-8') as f:
+            raw_metadata = json.load(f)  # 일반적으로 dict
+        raw_metadata = raw_metadata['items']
+        items = []
+        # 키를 1..N 정렬하여 리스트화
+        for k in sorted(raw_metadata.keys(), key=lambda x: str(x)):
+            print(k)
+            with open(os.path.join(self.dataset_path, k, "evaluation.json"), 'r', encoding='utf-8') as f:
+                seg_evaluation_metadata = json.load(f)
+                # print(seg_evaluation_metadata["segments"])
+            for i in range(1, raw_metadata[k]['num_midi_segments_created'] + 1):
+                if seg_evaluation_metadata["segments"].get(str(i)) is None:
+                    continue
+                new_dict = {}
+                new_dict['key'] = f"{k}_{i}"
+                new_dict['path'] = os.path.join(k, f"{i}.mid")
+                new_dict['trans_difficulty'] = 1 + int(100 - seg_evaluation_metadata["segments"][str(i)]["F1-Score"] * 100) # 반올림 해서 1부터 시작, 최대 101
+                items.append(new_dict)
+        # values()를 사용하던 기존 코드와 호환: 리스트로 변환
+        return items
+
+    def get_piece_path(self, index):
+        return os.path.join(self.dataset_path, self.metadata[index]['path'])
+    
+    def get_label(self, index):
+        return self.metadata[index]['trans_difficulty']
+
+    def serialize_metadata_for_save(self) -> Any:
+        # 간단히 0..N-1 키로 저장(기존 코드가 values()만 사용하므로 호환)
+        out = {}
+        for i, entry in enumerate(self.metadata):
+            out[str(i)] = entry
+        return out
+
+print(AudioTranscriptionDataset().__len__())
