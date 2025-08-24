@@ -6,7 +6,8 @@ def inference_from_pred(pred, threshold=0.5):
     """Convert ordinal predictions to class labels."""
     # if ((pred > threshold).cumprod(axis=1).sum(axis=1) == 0):
     #     raise ValueError(f"{pred}: Warning: All predictions are below the threshold. Returning zeros.")
-    return torch.clamp((pred > threshold).cumprod(axis=1).sum(axis=1), min=1)
+    result = (pred > threshold).cumprod(axis=1)
+    return result.sum(axis=1)
 
 def get_acc1_macro(y_true, y_pred):
     """Calculate macro accuracy with a tolerance of +/- 1 for each class."""

@@ -43,7 +43,7 @@ def my_config():
     numeric_versions = 1 # Numeric Features 버전, 버전별로 metadata에 저장
     numeric_features = 14  # Mikrokosmos의 Numeric Features 수
 
-    seed = 4223
+    seed = 42
     save_log = True  # 로그 저장 여부
     ex.observers.append(FileStorageObserver(logdir))
 
@@ -90,10 +90,12 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
     test_dataloader = DataLoader(testset, batch_size=batch_size)
 
     features_list = []
-    features_name_list = mikrokosmos_dataset.features_names
+    features_name_list = cipi_dataset.features_names
     for batch_features, _ in train_dataloader:
         features_list.append(batch_features.detach().cpu().numpy())
     features_list = np.concatenate(features_list, axis=0)
+
+    print(features_list.shape)
 
     feature_mean_std_list = [[], []]
     for i in range(numeric_features):
@@ -111,7 +113,8 @@ def train(logdir, numeric_features, numeric_versions, device, iterations, batch_
     ).to(device, dtype=torch.float32)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=learning_rate_decay_steps, gamma=learning_rate_decay_rate
+        optimizer, step_size=learning_rate_decay_steps, 
+        gamma=learning_rate_decay_rate
     )
 
     if save_log:

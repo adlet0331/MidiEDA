@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .evaluation import inference_from_pred
 
 class RubricNet(nn.Module):
     """
@@ -47,6 +48,9 @@ class RubricNet(nn.Module):
 
     def forward(self, x):
         # (batch_size, num_features) 크기의 입력을 받았다고 가정
+        x = torch.tensor(x, dtype=torch.float32)
+        if x.ndim == 1:
+            x = x.unsqueeze(0)
         x = (x - self.scaler_means) / self.scaler_stds
 
         if self.training:
@@ -67,6 +71,18 @@ class RubricNet(nn.Module):
         x = (x - self.scaler_means) / self.scaler_stds
         scores = [torch.tanh(layer(x[:, idx].unsqueeze(-1))).detach().numpy() for idx, layer in enumerate(self.descriptor_layers)]
         return scores
+
+    def get_summed_score(self, x):
+        if x.ndim == 1:
+            x = x.unsqueeze(0)
+        x = (x - self.scaler_means) / self.scaler_stds
+        scores = [torch.tanh(layer(x[:, idx].unsqueeze(-1))).detach().numpy() for idx, layer in enumerate(self.descriptor_layers)]
+        return np.sum(scores, axis=0)
+    
+    def predict(self, x):
+        self.eval()
+        output = self.forward(x)
+        return inference_from_pred(output, threshold=self.threshold)
 
     def get_scaler_infos(self):
         return self.scaler_means, self.scaler_stds
