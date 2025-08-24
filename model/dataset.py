@@ -287,7 +287,6 @@ class AudioTranscriptionDataset(MidiFeaturesPerformanceDataset):
         items = []
         # 키를 1..N 정렬하여 리스트화
         for k in sorted(raw_metadata.keys(), key=lambda x: str(x)):
-            print(k)
             with open(os.path.join(self.dataset_path, k, "evaluation.json"), 'r', encoding='utf-8') as f:
                 seg_evaluation_metadata = json.load(f)
                 # print(seg_evaluation_metadata["segments"])
@@ -297,7 +296,7 @@ class AudioTranscriptionDataset(MidiFeaturesPerformanceDataset):
                 new_dict = {}
                 new_dict['key'] = f"{k}_{i}"
                 new_dict['path'] = os.path.join(k, f"{i}.mid")
-                new_dict['trans_difficulty'] = 1 + int(100 - seg_evaluation_metadata["segments"][str(i)]["F1-Score"] * 100) # 반올림 해서 1부터 시작, 최대 101
+                new_dict['henle'] = min(1 + int(100 - seg_evaluation_metadata["segments"][str(i)]["F1-Score"] * 100), 9) # 반올림 해서 1부터 시작, 최대 9
                 items.append(new_dict)
         # values()를 사용하던 기존 코드와 호환: 리스트로 변환
         return items
@@ -306,7 +305,7 @@ class AudioTranscriptionDataset(MidiFeaturesPerformanceDataset):
         return os.path.join(self.dataset_path, self.metadata[index]['path'])
     
     def get_label(self, index):
-        return self.metadata[index]['trans_difficulty']
+        return self.metadata[index]['henle']
 
     def serialize_metadata_for_save(self) -> Any:
         # 간단히 0..N-1 키로 저장(기존 코드가 values()만 사용하므로 호환)
@@ -315,4 +314,8 @@ class AudioTranscriptionDataset(MidiFeaturesPerformanceDataset):
             out[str(i)] = entry
         return out
 
-print(AudioTranscriptionDataset().__len__())
+    def get_max_label(self):
+        max_label = 0
+        for i, entry in enumerate(self.metadata):
+            max_label = max(max_label, entry['henle'])
+        return max_label

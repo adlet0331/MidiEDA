@@ -105,7 +105,9 @@ class MidiFeatures:
 
         # Interval (인접 노트간 음정 간격)
         self.iterable_features['intervals'] = [abs(notes[i+1].pitch - notes[i].pitch) for i in range(len(notes)-1)]
-        self.numeric_features['interval_mean'] = np.mean(self.iterable_features['intervals'])
+        interval_np = np.array(self.iterable_features['intervals'])
+        interval_np = interval_np[~np.isnan(interval_np)]  # Remove NaN values
+        self.numeric_features['interval_mean'] = np.nanmean(interval_np) if len(interval_np) > 0 else 0
 
         # Velocity 분포
         velocities = [note.velocity for note in notes]
