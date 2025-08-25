@@ -3,10 +3,10 @@ from model import RubricNet
 import numpy as np
 import matplotlib.pyplot as plt
 
-def get_features_data(runs_name = 'p-est-250823-182728'):
-    model_snapshot_path = f'/Users/simhyeongju/AVAPT/EDA/runs/{runs_name}/model_snapshots/model_bestvalidation.pt'
-    cipi_cached_path = '/Users/simhyeongju/AVAPT/data/CIPI/features/features_v1.json'
-    cipi_label_path = '/Users/simhyeongju/AVAPT/data/CIPI/index.json'
+def get_features_data(runs_name = 'runs/p-est-250823-182728',
+                      cipi_cached_path = '/Users/simhyeongju/AVAPT/data/CIPI/features/features_v1.json',
+                      cipi_label_path = '/Users/simhyeongju/AVAPT/data/CIPI/index.json'):
+    model_snapshot_path = f'/Users/simhyeongju/AVAPT/EDA/{runs_name}/model_snapshots/model_bestvalidation.pt'
 
     rubricnet = RubricNet()
     rubricnet.load_state_dict(torch.load(model_snapshot_path, weights_only=False))
