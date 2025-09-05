@@ -3,7 +3,7 @@ from model import RubricNet
 import numpy as np
 import matplotlib.pyplot as plt
 
-def get_features_data(runs_name = 'runs/p-est-250823-182728',
+def get_features_data(runs_name = 'runs/p-est-250822-160040',
                       cipi_cached_path = '/Users/simhyeongju/AVAPT/data/CIPI/features/features_v1.json',
                       cipi_label_path = '/Users/simhyeongju/AVAPT/data/CIPI/index.json'):
     model_snapshot_path = f'/Users/simhyeongju/AVAPT/EDA/{runs_name}/model_snapshots/model_bestvalidation.pt'

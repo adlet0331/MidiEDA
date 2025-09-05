@@ -82,6 +82,7 @@ class RubricNet(nn.Module):
     def predict(self, x):
         self.eval()
         output = self.forward(x)
+        # print(output)
         return inference_from_pred(output, threshold=self.threshold)
 
     def get_scaler_infos(self):
