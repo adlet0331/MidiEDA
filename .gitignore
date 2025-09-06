@@ -1,4 +1,5 @@
 **/
 !model/
 !onsets_and_frames/
+!data_distribution_plots/
 *.sf2

@@ -46,6 +46,13 @@ class RubricNet(nn.Module):
         )
         self.sigmoid = nn.Sigmoid()
 
+    def set_scaler_parameter_manually(self, means, stds):
+        if len(means) == self.num_features and len(stds) == self.num_features:
+            self.scaler_means = torch.tensor(means, dtype=torch.float32)
+            self.scaler_stds = torch.tensor(stds, dtype=torch.float32)
+        else:
+            raise ValueError("Length of means and stds must match num_features")
+
     def forward(self, x):
         # (batch_size, num_features) 크기의 입력을 받았다고 가정
         x = torch.tensor(x, dtype=torch.float32)

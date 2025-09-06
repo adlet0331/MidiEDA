@@ -3,15 +3,32 @@ from model import RubricNet, MidiFeatures
 import numpy as np
 import matplotlib.pyplot as plt
 
-def get_mid_files_statistics(mid_folder_path = "/Users/simhyeongju/AVAPT/data/pianovam/midi"):
+def get_mid_files_statistics(runs_name = "p-est-250822-160040", mid_folder_path = "/Users/simhyeongju/AVAPT/data/pianovam/midi"):
     # Load Model
-    runs_name = 'runs/p-est-250827-144050'
-    model_snapshot_path = f'/Users/simhyeongju/AVAPT/EDA/{runs_name}/model_snapshots/model_bestvalidation.pt'
+    model_snapshot_path = f'/Users/simhyeongju/AVAPT/EDA/runs/{runs_name}/model_snapshots/model_bestvalidation.pt'
     rubricnet = RubricNet()
     rubricnet.load_state_dict(torch.load(model_snapshot_path, weights_only=False))
 
     mid_file_list = [f for f in os.listdir(mid_folder_path) if f.endswith(('.mid', '.xml'))]
     difficulty_scores = [0 for _ in range(9)]
+
+    # Scaling Features
+    features_list = []
+    for filename in mid_file_list:
+        midi_path = os.path.join(mid_folder_path, filename)
+        midi_features = MidiFeatures(midi_path)
+        features = midi_features.get_numeric_features()
+        features_list.append(features)
+    features_list = np.array(features_list)
+
+    feature_mean_std_list = [[], []]
+    for idx in range(14):
+        feature_list = features_list[:, idx].reshape(-1, 1)
+        feature_mean_std_list[0].append(np.mean(feature_list))
+        feature_mean_std_list[1].append(np.std(feature_list))
+    rubricnet.set_scaler_parameter_manually(feature_mean_std_list[0], feature_mean_std_list[1])
+    # Scaling Features Ends
+
     for idx, filename in enumerate(mid_file_list):
         midi_path = os.path.join(mid_folder_path, filename)
         midi_features = MidiFeatures(midi_path)
