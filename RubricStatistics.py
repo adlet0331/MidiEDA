@@ -12,7 +12,8 @@ def get_mid_files_statistics(runs_name = "p-est-250822-160040", mid_folder_path 
     mid_file_list = [f for f in os.listdir(mid_folder_path) if f.endswith(('.mid', '.xml'))]
     difficulty_scores = [0 for _ in range(9)]
 
-    # Scaling Features
+    # ====================== Scaling Features======================
+
     features_list = []
     for filename in mid_file_list:
         midi_path = os.path.join(mid_folder_path, filename)
@@ -27,7 +28,8 @@ def get_mid_files_statistics(runs_name = "p-est-250822-160040", mid_folder_path 
         feature_mean_std_list[0].append(np.mean(feature_list))
         feature_mean_std_list[1].append(np.std(feature_list))
     rubricnet.set_scaler_parameter_manually(feature_mean_std_list[0], feature_mean_std_list[1])
-    # Scaling Features Ends
+
+    # ====================== Scaling Features Ends ======================
 
     for idx, filename in enumerate(mid_file_list):
         midi_path = os.path.join(mid_folder_path, filename)
