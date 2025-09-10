@@ -78,13 +78,6 @@ class RubricNet(nn.Module):
         x = (x - self.scaler_means) / self.scaler_stds
         scores = [torch.tanh(layer(x[:, idx].unsqueeze(-1))).detach().numpy() for idx, layer in enumerate(self.descriptor_layers)]
         return scores
-
-    def get_summed_score(self, x):
-        if x.ndim == 1:
-            x = x.unsqueeze(0)
-        x = (x - self.scaler_means) / self.scaler_stds
-        scores = [torch.tanh(layer(x[:, idx].unsqueeze(-1))).detach().numpy() for idx, layer in enumerate(self.descriptor_layers)]
-        return np.sum(scores, axis=0)
     
     def predict(self, x):
         self.eval()

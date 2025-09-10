@@ -42,14 +42,14 @@ def get_features_data(runs_name = 'runs/p-est-250822-160040',
         # for i in range(len(features)):
         #     print(f"{features_name[i]}: {features[i]}, scaled: {scaled_features[i]}, score: {feature_scores[i] / 2 + 0.5}")
 
-    # scaled_label_features_count = [features.shape[0] for features in label_features]
+    scaled_label_features_count = [features.shape[0] for features in label_features]
     # scaled_label_features_mean = [np.mean(features, axis=0) for features in label_features]
 
-    return features_name, label_features, label_scores
+    return features_name, label_features, label_scores, scaled_label_features_count
 
 # get_features_data()
 
-def create_segmented_bar(widths, colormap='Greens', font_size=24):
+def create_segmented_bar(widths, isReversed=False, colormap='Greens', font_size=24):
     """
     너비가 다른 세그먼트로 구성된 수평 막대 그래프를 생성합니다.
 
@@ -107,7 +107,7 @@ def create_segmented_bar(widths, colormap='Greens', font_size=24):
         ax.text(
             text_x_position,
             0,
-            str(i + 1),
+            str(i + 1) if not isReversed else str(num_segments - i),
             ha='center',          # 수평 정렬: 가운데
             va='center',          # 수직 정렬: 가운데
             fontsize=font_size,
