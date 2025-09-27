@@ -76,7 +76,7 @@ class RubricNet(nn.Module):
         if x.ndim == 1:
             x = x.unsqueeze(0)
         x = (x - self.scaler_means) / self.scaler_stds
-        scores = [torch.tanh(layer(x[:, idx].unsqueeze(-1))).detach().numpy() for idx, layer in enumerate(self.descriptor_layers)]
+        scores = [torch.tanh(layer(x[:, idx].unsqueeze(-1))) for idx, layer in enumerate(self.descriptor_layers)]
         return scores
     
     def predict(self, x):

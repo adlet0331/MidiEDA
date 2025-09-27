@@ -129,7 +129,7 @@ class MidiFeatures:
         velocities = midi[:, 3]
         segments = slice_midi(pitches, intervals, velocities, num_segments, segment_length_sec)
 
-        segment_features = {}
+        segment_features = []
         for i, segment in enumerate(segments):
             # Make Notes List from segment
             segment_notes = []
@@ -141,10 +141,11 @@ class MidiFeatures:
                     end=segment['intervals'][j][1]
                 ))
             segment_feature, segment_numeric_feature = self.extract_features(segment_notes, clipped=True, clipped_time=segment_length_sec)
-            segment_features[i] = {
-                'numeric_features': segment_numeric_feature,
-                'features': segment_feature
-            }
+            segment_features.append([numeric_feature for numeric_feature in segment_numeric_feature.values()])
+            # segment_features[i] = {
+            #     'numeric_features': segment_numeric_feature,
+            #     'features': segment_feature
+            # }
         
         return segment_features
 
